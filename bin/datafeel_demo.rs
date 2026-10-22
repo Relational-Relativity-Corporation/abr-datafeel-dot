@@ -1,21 +1,37 @@
 // datafeel_demo.rs
 //
-// DataFeel Dot — V0.3 multimodal resonance sweep.
+// DataFeel Dot — V0.4 multimodal co-activity sweep.
 //
-// Sweeps the circadian phase (time_of_day_phase) from 0.0 → 1.0 in 20 steps
+// EVALUATOR NOTE: The relational loop uses a provisional simulation of the
+// PrimaryΔΣ and ABR operator paths. It is NOT a Kernel V8 implementation.
+// Output reflects the declared relational topology and Origin schedules;
+// it is not a validated kernel result. See relational_loop.rs for detail.
+//
+// Sweeps the circadian phase (time_of_day_phase) from 0.0 → 0.95 in 20 steps
 // (Δ = 0.05 per step, representing ~72 minutes of circadian time per step).
 // At each phase point, the same thermal disturbance sequence is run through
 // both the activity-associated and rest-associated profiles using the ABR
-// operator.
+// operator gated by their respective Origin-declared profile loci.
 //
-// The sweep reveals the AREA OF MULTIMODAL INTERSECTION — where haptic AND
-// optical outputs are simultaneously expressing above a meaningful threshold.
-// Because both relations in each profile share the same circadian interior
-// locus (L-circadian as gate B), the resonance window is defined by the gate
-// value, not by the thermal input alone.
+// V0.4 changes from V0.3:
+//   - Activity and rest profiles now use Origin-declared loci (L-activity,
+//     L-rest) with explicit schedule boundaries, replacing the raw
+//     time_of_day_phase gate. This corrects the midnight discontinuity
+//     in V0.3 where phase=0.95 and phase=0.0 produced opposite gate values.
+//   - Both profiles use gate_inverted=false; the Origin schedule itself
+//     expresses the preferred phase window.
+//   - Missing host observables now return an error (no silent fallback).
+//   - ResonanceFlag::Resonant renamed to CoActive to clarify that this
+//     refers to simultaneous command thresholds, not physiological resonance.
 //
-// Activity profile (gate_inverted=false):  sigma × B → strong when B high (daytime)
-// Rest profile    (gate_inverted=true):    sigma × (1−B) → strong when B low (night)
+// The sweep reveals the AREA OF MULTIMODAL CO-ACTIVITY — where haptic AND
+// optical outputs are simultaneously above threshold. Because both relations
+// in each profile share the same Origin interior locus (L-activity or L-rest),
+// the co-active window is determined by the declared schedule, not by the
+// thermal input alone.
+//
+// Activity profile: sigma × L-activity   [peak: 06:00–18:00, rise: 05:00, fall: 20:00]
+// Rest profile:     sigma × L-rest        [peak: 21:00–03:00, rise: 19:00, fall: 07:00]
 //
 // Scientific discipline: outputs are computed device commands (MockFixture).
 // No hardware is connected. No physiological effects are claimed.
@@ -108,9 +124,9 @@ fn run_phase(
         peak_g       = peak_g.max(cmds.optical.g);
         peak_b       = peak_b.max(cmds.optical.b);
 
-        // Escalate resonance flag.
+        // Escalate co-activity flag.
         best_resonance = match (&best_resonance, &flag) {
-            (_, ResonanceFlag::Resonant)   => ResonanceFlag::Resonant,
+            (_, ResonanceFlag::CoActive)   => ResonanceFlag::CoActive,
             (ResonanceFlag::Quiescent, _)  => flag.clone(),
             _                              => best_resonance,
         };
@@ -133,13 +149,14 @@ fn main() {
         .expect("m_declaration_rest.json not found");
 
     println!();
-    println!("DataFeel Dot — V0.3 Multimodal Resonance Sweep");
+    println!("DataFeel Dot — V0.4 Multimodal Co-Activity Sweep");
     println!("══════════════════════════════════════════════════════════════════════════════════════════════════");
     println!("Circadian phase sweep: 0.00 → 0.95, Δ = 0.05 (20 steps ≈ 72 min each)");
     println!("Thermal sequence: 12-step external disturbance → recovery, MockFixture, no hardware");
-    println!("Operator: ABR — both haptic (R-01) and optical (R-02) gated by L-circadian (B)");
-    println!("Activity gate: sigma × B    (strong when B high / daytime, phase ~0.25–0.75)");
-    println!("Rest gate:     sigma × (1−B) (strong when B low / night, phase ~0.0–0.25, 0.75–1.0)");
+    println!("Operator: ABR — haptic (R-01) and optical (R-02) gated by Origin-declared profile locus");
+    println!("Activity: sigma × L-activity  [schedule: 05:00–06:00 rise | 06:00–18:00 peak | 18:00–20:00 fall]");
+    println!("Rest:     sigma × L-rest       [schedule: 19:00–21:00 rise | 21:00–03:00 peak | 03:00–07:00 fall]");
+    println!("Evaluator: provisional simulation — not a validated Kernel V8 implementation");
     println!("══════════════════════════════════════════════════════════════════════════════════════════════════");
     println!();
 
@@ -173,10 +190,10 @@ fn main() {
 
     // ── Activity profile sweep ───────────────────────────────────────────────
     println!("── Activity-associated profile: peak outputs per phase point ───────────────────────────────────");
-    println!("  (Blue-enriched / 170 Hz / ABR gate=B / amplitude×1.0 / pulse 30 ms base)");
+    println!("  (Blue-enriched / 170 Hz / ABR gate=L-activity / amplitude×1.0 / pulse 30 ms base)");
     println!();
     println!("{:>6}  {:>8}  {:>7}  {:>7}  {:>10}  {:>11}",
-        "phase", "time", "hap_amp", "hap_ms", "RGB(peak)", "resonance");
+        "phase", "time", "hap_amp", "hap_ms", "RGB(peak)", "co-activity");
     println!("{:─>6}  {:─>8}  {:─>7}  {:─>7}  {:─>10}  {:─>11}",
         "", "", "", "", "", "");
 
@@ -196,10 +213,10 @@ fn main() {
 
     // ── Rest profile sweep ───────────────────────────────────────────────────
     println!("── Rest-associated profile: peak outputs per phase point ────────────────────────────────────────");
-    println!("  (Dim red / 170 Hz / ABR gate=(1−B) / amplitude×0.5 / pulse 200 ms base)");
+    println!("  (Dim red / 170 Hz / ABR gate=L-rest / amplitude×0.5 / pulse 200 ms base)");
     println!();
     println!("{:>6}  {:>8}  {:>7}  {:>7}  {:>10}  {:>11}",
-        "phase", "time", "hap_amp", "hap_ms", "RGB(peak)", "resonance");
+        "phase", "time", "hap_amp", "hap_ms", "RGB(peak)", "co-activity");
     println!("{:─>6}  {:─>8}  {:─>7}  {:─>7}  {:─>10}  {:─>11}",
         "", "", "", "", "", "");
 
@@ -217,9 +234,9 @@ fn main() {
     }
     println!();
 
-    // ── Multimodal resonance map ─────────────────────────────────────────────
-    println!("── Multimodal resonance map ─────────────────────────────────────────────────────────────────────");
-    println!("  RESONANT = haptic AND optical are simultaneously above threshold at this phase");
+    // ── Multimodal co-activity map ───────────────────────────────────────────
+    println!("── Multimodal co-activity map ───────────────────────────────────────────────────────────────────");
+    println!("  CO_ACTIVE = haptic AND optical are simultaneously above threshold at this phase");
     println!("  Thresholds: haptic amplitude > 0.10, any optical channel > 10 (out of 200 max)");
     println!("  These are relational-output thresholds, not physiological targets.");
     println!();
@@ -228,21 +245,21 @@ fn main() {
     println!("{:─>6}  {:─>8}  {:─>12}  {:─>12}  {:─>10}",
         "", "", "", "", "");
 
-    let mut active_resonant_count = 0usize;
-    let mut rest_resonant_count   = 0usize;
-    let mut both_resonant_count   = 0usize;
+    let mut active_coactive_count = 0usize;
+    let mut rest_coactive_count   = 0usize;
+    let mut both_coactive_count   = 0usize;
 
     for s in &summaries {
         let time_label = phase_to_time(s.phase);
         let act_r = res_label(&s.act_resonance);
         let rst_r = res_label(&s.rest_resonance);
-        let both  = s.act_resonance == ResonanceFlag::Resonant
-            && s.rest_resonance == ResonanceFlag::Resonant;
+        let both  = s.act_resonance == ResonanceFlag::CoActive
+            && s.rest_resonance == ResonanceFlag::CoActive;
         let both_label = if both { "← BOTH" } else { "" };
 
-        if s.act_resonance == ResonanceFlag::Resonant { active_resonant_count += 1; }
-        if s.rest_resonance == ResonanceFlag::Resonant { rest_resonant_count += 1; }
-        if both { both_resonant_count += 1; }
+        if s.act_resonance == ResonanceFlag::CoActive { active_coactive_count += 1; }
+        if s.rest_resonance == ResonanceFlag::CoActive { rest_coactive_count += 1; }
+        if both { both_coactive_count += 1; }
 
         println!("{:>6.2}  {:>8}  {:>12}  {:>12}  {}",
             s.phase, time_label, act_r, rst_r, both_label);
@@ -251,17 +268,23 @@ fn main() {
 
     // ── Summary ──────────────────────────────────────────────────────────────
     println!("── Sweep summary ────────────────────────────────────────────────────────────────────────────────");
-    println!("  Phases with activity resonance:  {} / 20", active_resonant_count);
-    println!("  Phases with rest resonance:      {} / 20", rest_resonant_count);
-    println!("  Phases with simultaneous (both): {} / 20", both_resonant_count);
+    println!("  Steps with activity co-active:      {} / 20", active_coactive_count);
+    println!("  Steps with rest co-active:          {} / 20", rest_coactive_count);
+    println!("  Steps with simultaneous (both):     {} / 20", both_coactive_count);
     println!();
-    println!("  Circadian biology note:");
-    println!("  Activity resonance window corresponds to the daytime gate (B = phase, high midday).");
-    println!("  Rest resonance window corresponds to the biological night gate (1−B, high at midnight).");
-    println!("  The windows are complementary by construction — the same thermal disturbance");
-    println!("  signal activates different modality combinations depending on circadian phase.");
+    println!("  V0.4 schedule note:");
+    println!("  Activity co-active window: declared schedule 05:00–20:00.");
+    println!("    rise_start=0.208 (05:00), peak_start=0.25 (06:00),");
+    println!("    peak_end=0.75 (18:00), fall_end=0.833 (20:00).");
+    println!("  Rest co-active window: declared schedule 19:00–07:00, wrapping across midnight.");
+    println!("    rise_start=0.792 (19:00), peak_start=0.875 (21:00),");
+    println!("    peak_end=0.125 (03:00), fall_end=0.292 (07:00).");
+    println!("  Both schedules are cyclic: profile value at phase=0.0 equals phase=1.0.");
+    println!("  The morning transition (rest→activity) is brief; with 20-point sweep");
+    println!("  (Δ=0.05, ~72 min/step) it may fall between step boundaries.");
     println!();
     println!("══════════════════════════════════════════════════════════════════════════════════════════════════");
+    println!("Evaluator: provisional simulation — not a validated Kernel V8 implementation.");
     println!("All outputs are computed device commands (MockFixture). No physiological effects are claimed.");
     println!("Experimental sensory configurations only. Not therapeutic prescriptions.");
     println!("Scientific basis: docs/verification_record.md");
@@ -283,7 +306,7 @@ fn phase_to_time(phase: f32) -> String {
 
 fn res_label(flag: &ResonanceFlag) -> &'static str {
     match flag {
-        ResonanceFlag::Resonant  => "RESONANT",
+        ResonanceFlag::CoActive  => "CO_ACTIVE",
         ResonanceFlag::Partial   => "partial",
         ResonanceFlag::Quiescent => "quiet",
     }

@@ -2,9 +2,13 @@
 //
 // RelationalLoop — core loop: read → observe → evaluate → project → command.
 //
-// Kernel V8 integration is stubbed here pending the abr-kernel crate being
-// added as a pinned dependency (Phase 3). The stub preserves the interface
-// so that Phase 1–4 conformance tests can run against the full loop structure.
+// Kernel V8 integration: the evaluate_stub function below is a provisional
+// simulation of the PrimaryΔΣ and ABR operator paths. It will be replaced
+// when the abr-kernel crate is available as a pinned dependency (Phase 3).
+// The provisional evaluator preserves the interface contract so that Phase 1–4
+// conformance tests can run against the declared relational topology without
+// requiring the kernel dependency. Output from evaluate_stub is NOT a validated
+// Kernel V8 result.
 //
 // KEY INVARIANT: prior_state is NEVER initialised synthetically.
 // The first step runs with prior_state = None. RelationalState accumulates
@@ -34,7 +38,12 @@ use crate::actuator_projection::{ActuatorProjection, ProjectionError};
 ///
 /// These are loci declared with `LocusSource::Host` — values the device
 /// itself cannot read but the host can supply (e.g. time_of_day_phase).
-/// Pass an empty map when the declaration contains no Host-sourced loci.
+/// Also used as the clock source for `LocusSource::Origin` loci, which
+/// derive their schedule-computed value from a named host observable.
+///
+/// V0.4: Missing entries for Host or Origin loci are no longer silently
+/// substituted. The loop returns `LoopError::MissingHostObservable` if a
+/// required host observable is absent from this map.
 pub type HostObservables = HashMap<String, f32>;
 
 // ---------------------------------------------------------------------------
@@ -49,13 +58,17 @@ pub enum LoopError {
     Projection(#[from] ProjectionError),
     #[error("kernel error: {0}")]
     Kernel(String),
+    /// A Host or Origin locus requires an observable that was not supplied
+    /// in the HostObservables map. Silent substitution is not performed.
+    #[error("missing host observable: '{0}' — required by declaration but not supplied in host_obs")]
+    MissingHostObservable(String),
 }
 
 // ---------------------------------------------------------------------------
 // Operator output
 // ---------------------------------------------------------------------------
 
-/// Output from one Kernel V8 operator evaluation for a single relation.
+/// Output from one provisional-simulation operator evaluation for a single relation.
 ///
 /// raw_sigma: ungated accumulation of delta values — carries the history of
 ///            the source locus regardless of any ABR gate state.
@@ -152,13 +165,15 @@ impl RelationalLoop {
     ///
     /// 1. Read thermistor from device.
     /// 2. Construct Observation (Physical or MockFixture per provenance).
-    /// 3. Evaluate Kernel V8 operators against declared topology and prior state.
+    /// 3. Evaluate operator paths via provisional simulation (Phase 3: abr-kernel).
     /// 4. Project relational output to actuator commands.
     /// 5. Dispatch commands to device.
     /// 6. Update prior_state (Physical observations only).
     ///
     /// `host_obs` supplies values for Host-sourced loci declared in the M
-    /// (e.g. `time_of_day_phase`). Pass `&Default::default()` when unused.
+    /// (e.g. `time_of_day_phase`) and the clock source for Origin loci.
+    /// A missing entry for any required Host or Origin observable returns
+    /// `LoopError::MissingHostObservable` — no silent substitution is performed.
     pub fn step(
         &mut self,
         provenance: ObsProvenance,
@@ -175,8 +190,8 @@ impl RelationalLoop {
                 Observation::mock_fixture(thermistor_c, self.actuator_state.clone()),
         };
 
-        // 3. Evaluate — Kernel V8 stub (Phase 3 will replace this block).
-        let state = self.evaluate_stub(&observation, host_obs);
+        // 3. Evaluate — provisional simulation (will be replaced by abr-kernel once available).
+        let state = self.evaluate_stub(&observation, host_obs)?;
 
         // 4. Project to actuator commands.
         let commands = self.projection.project(&state, &self.declaration)?;
@@ -201,8 +216,11 @@ impl RelationalLoop {
         Ok(StepOutput { state, commands, observation })
     }
 
-    /// Kernel V8 stub — implements PrimaryΔΣ and ABR for all declared relations.
-    /// Replaced in Phase 3 when abr-kernel is added as a pinned dependency.
+    /// Provisional simulation of operator evaluation for all declared relations.
+    ///
+    /// This function approximates PrimaryΔΣ and ABR operator behavior to support
+    /// Phase 1–4 conformance testing. It is NOT a validated Kernel V8 implementation.
+    /// It will be replaced in Phase 3 when abr-kernel is added as a pinned dependency.
     ///
     /// For each declared relation:
     ///
@@ -213,32 +231,50 @@ impl RelationalLoop {
     ///               Computes raw Σ for A as above. Applies gate:
     ///                 gate_inverted=false → output = raw_Σ × B
     ///                 gate_inverted=true  → output = raw_Σ × (1−B)
-    ///               The gate couples the modality output to the circadian
-    ///               (or other interior) locus state.
+    ///               For V0.4+, B is typically an Origin locus whose schedule
+    ///               directly expresses the active phase, making gate_inverted
+    ///               false for both activity and rest profiles.
     ///
     /// raw_sigma is preserved across steps in step_state.relation_outputs,
     /// so the ungated history of the source locus is always available.
+    ///
+    /// Returns Err(LoopError::MissingHostObservable) if any Host or Origin locus
+    /// references an observable not present in host_obs.
     fn evaluate_stub(
         &self,
         obs: &Observation,
         host_obs: &HostObservables,
-    ) -> RelationalState {
-        // 1. Read current raw value for every declared locus.
+    ) -> Result<RelationalState, LoopError> {
+        // 1. Resolve current raw value for every declared locus.
+        //    Host and Origin loci require entries in host_obs — no silent substitution.
         let mut locus_values: HashMap<String, f32> = HashMap::new();
         for locus in &self.declaration.loci {
-            let val = match locus.source {
+            let val = match &locus.source {
                 LocusSource::Device => obs.thermistor_c,
-                LocusSource::Host   => *host_obs.get(&locus.observable).unwrap_or(&0.5),
                 LocusSource::Actuator => 0.0,
+                LocusSource::Host => {
+                    host_obs.get(&locus.observable)
+                        .copied()
+                        .ok_or_else(|| LoopError::MissingHostObservable(locus.observable.clone()))?
+                }
+                LocusSource::Origin(schedule) => {
+                    // Evaluate the declared trapezoidal schedule at the current
+                    // host-supplied clock phase.
+                    let phase = host_obs.get(&schedule.derives_from)
+                        .copied()
+                        .ok_or_else(|| LoopError::MissingHostObservable(schedule.derives_from.clone()))?;
+                    schedule.value_at(phase)
+                }
             };
             locus_values.insert(locus.id.clone(), val);
         }
 
-        // 2. For each relation, compute the operator output.
+        // 2. For each relation, compute the provisional operator output.
         let mut relation_outputs: HashMap<String, OperatorOutput> = HashMap::new();
 
         for rel in &self.declaration.relations {
-            let current_from = *locus_values.get(&rel.from).unwrap_or(&0.0);
+            // Validation guarantees rel.from is declared; locus_values is complete.
+            let current_from = locus_values.get(&rel.from).copied().unwrap_or(0.0);
 
             // Delta: difference from prior step's raw value for the source locus.
             let prior_from = self.step_state.as_ref()
@@ -253,10 +289,11 @@ impl RelationalLoop {
             let raw_sigma = prior_raw_sigma + delta.unwrap_or(0.0);
 
             // Gated sigma — operator-specific.
+            // Validation guarantees interior_locus_id is declared and in locus_values.
             let sigma = match &rel.operator_path {
                 OperatorPath::PrimaryDeltaSigma => raw_sigma,
                 OperatorPath::ABR { interior_locus_id, gate_inverted } => {
-                    let b = *locus_values.get(interior_locus_id).unwrap_or(&0.5);
+                    let b = locus_values.get(interior_locus_id).copied().unwrap_or(0.0);
                     let gate = if *gate_inverted { 1.0 - b } else { b };
                     raw_sigma * gate
                 }
@@ -273,16 +310,16 @@ impl RelationalLoop {
                     .unwrap_or(false)
             })
             .and_then(|r| relation_outputs.get(&r.id))
-            .map(|o| (o.delta, o.raw_sigma))  // raw_sigma for compat (replay tests)
+            .map(|o| (o.delta, o.raw_sigma))
             .unwrap_or((None, 0.0));
 
-        RelationalState {
+        Ok(RelationalState {
             source_observation: obs.clone(),
             delta_thermistor,
             sigma_thermistor,
             locus_values,
             relation_outputs,
-        }
+        })
     }
 
     /// Returns a reference to the current prior state, if any.

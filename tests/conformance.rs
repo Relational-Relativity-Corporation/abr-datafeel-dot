@@ -3,8 +3,9 @@
 // Phase 1–4 conformance tests.
 //
 // These tests verify the structural invariants of the relational loop
-// independently of any hardware and independently of Kernel V8's internals.
-// They run against MockDevice with synthetic observation sequences.
+// independently of any hardware and independently of the provisional
+// operator simulation's internals. They run against MockDevice with
+// synthetic observation sequences.
 //
 // Invariants tested:
 //   1. DeviceInterface trait — MockDevice satisfies the contract.
@@ -13,11 +14,13 @@
 //   4. Provenance isolation — MockFixture observations do not update prior_state.
 //   5. Projection bounds — commands stay within declared hardware limits.
 //   6. No synthetic initialisation — prior_state starts as None.
+//   7. Origin schedule — cyclic across midnight; correct phase boundaries.
+//   8. Missing host observable — returns error, no silent fallback.
 
 use std::sync::Arc;
 use abr_datafeel_dot::{
     actuator_projection::ActuatorProjection,
-    declaration::{HapticEnvelope, Locus, LocusSource, MDeclaration, OperatorPath, Relation, BoundaryConditions},
+    declaration::{HapticEnvelope, Locus, LocusSource, MDeclaration, OperatorPath, OriginSchedule, Relation, BoundaryConditions},
     device_interface::{DeviceInterface, MockDevice},
     observation::ObsProvenance,
     relational_loop::RelationalLoop,
@@ -136,7 +139,7 @@ fn abr_path_rejected_with_actuator_interior_locus() {
         gate_inverted: false,
     };
     let err = decl.validate().unwrap_err();
-    assert!(err.to_string().contains("not Device-sourced or Host-sourced"));
+    assert!(err.to_string().contains("not Device-, Host-, or Origin-sourced"));
 }
 
 #[test]
@@ -147,6 +150,30 @@ fn abr_path_accepted_with_device_interior_locus() {
         interior_locus_id: "L-thermal".to_string(),
         gate_inverted: false,
     };
+    assert!(decl.validate().is_ok());
+}
+
+#[test]
+fn abr_path_accepted_with_origin_interior_locus() {
+    let mut decl = minimal_declaration();
+    // Add an Origin-sourced locus.
+    decl.loci.push(Locus {
+        id: "L-activity".to_string(),
+        observable: "activity_profile".to_string(),
+        source: LocusSource::Origin(OriginSchedule {
+            derives_from: "time_of_day_phase".to_string(),
+            rise_start: 0.208,
+            peak_start: 0.25,
+            peak_end:   0.75,
+            fall_end:   0.833,
+        }),
+        basis: None,
+    });
+    decl.relations[0].operator_path = OperatorPath::ABR {
+        interior_locus_id: "L-activity".to_string(),
+        gate_inverted: false,
+    };
+    // Origin locus must be admissible as ABR interior.
     assert!(decl.validate().is_ok());
 }
 
@@ -234,4 +261,161 @@ fn prior_state_starts_as_none() {
 
     assert!(loop_.prior_state().is_none(),
         "prior_state must be None before any observation");
+}
+
+// ---------------------------------------------------------------------------
+// 7. Origin schedule — cyclic and boundary correctness
+// ---------------------------------------------------------------------------
+
+#[test]
+fn origin_schedule_is_cyclic_across_midnight() {
+    // Activity schedule: rises 05:00 → peaks 06:00–18:00 → falls to 20:00.
+    let activity = OriginSchedule {
+        derives_from: "time_of_day_phase".to_string(),
+        rise_start: 0.208,
+        peak_start: 0.25,
+        peak_end:   0.75,
+        fall_end:   0.833,
+    };
+
+    // Phase 0.0 and 1.0 must produce the same value (midnight = midnight).
+    let at_midnight     = activity.value_at(0.0);
+    let at_midnight_wrap = activity.value_at(1.0);
+    assert!(
+        (at_midnight - at_midnight_wrap).abs() < 1e-4,
+        "activity profile must be cyclic: value_at(0.0)={at_midnight} vs value_at(1.0)={at_midnight_wrap}"
+    );
+
+    // Activity is 0.0 at midnight.
+    assert!(at_midnight < 0.05,
+        "activity profile must be near zero at midnight (phase=0.0), got {at_midnight}");
+
+    // Activity is 1.0 at noon (phase 0.5).
+    let at_noon = activity.value_at(0.5);
+    assert!((at_noon - 1.0).abs() < 1e-4,
+        "activity profile must be 1.0 at noon (phase=0.5), got {at_noon}");
+
+    // Rest schedule: rises 19:00 → peaks 21:00–03:00 (wrapping) → falls to 07:00.
+    let rest = OriginSchedule {
+        derives_from: "time_of_day_phase".to_string(),
+        rise_start: 0.792,
+        peak_start: 0.875,
+        peak_end:   0.125,
+        fall_end:   0.292,
+    };
+
+    // Phase 0.0 and 1.0 must produce the same value.
+    let rest_at_midnight      = rest.value_at(0.0);
+    let rest_at_midnight_wrap = rest.value_at(1.0);
+    assert!(
+        (rest_at_midnight - rest_at_midnight_wrap).abs() < 1e-4,
+        "rest profile must be cyclic: value_at(0.0)={rest_at_midnight} vs value_at(1.0)={rest_at_midnight_wrap}"
+    );
+
+    // Rest is 1.0 at midnight (peak spans across midnight).
+    assert!((rest_at_midnight - 1.0).abs() < 1e-4,
+        "rest profile must be 1.0 at midnight (phase=0.0), got {rest_at_midnight}");
+
+    // Rest is 0.0 at noon.
+    let rest_at_noon = rest.value_at(0.5);
+    assert!(rest_at_noon < 0.05,
+        "rest profile must be near zero at noon (phase=0.5), got {rest_at_noon}");
+}
+
+#[test]
+fn origin_schedule_activity_is_zero_before_rise_start() {
+    let activity = OriginSchedule {
+        derives_from: "time_of_day_phase".to_string(),
+        rise_start: 0.208,
+        peak_start: 0.25,
+        peak_end:   0.75,
+        fall_end:   0.833,
+    };
+    // Just before rise_start (04:48 = phase 0.200).
+    let val = activity.value_at(0.20);
+    assert!(val < 0.05, "activity must be zero before rise_start, got {val}");
+}
+
+#[test]
+fn origin_schedule_rest_wraps_across_midnight_correctly() {
+    let rest = OriginSchedule {
+        derives_from: "time_of_day_phase".to_string(),
+        rise_start: 0.792,
+        peak_start: 0.875,
+        peak_end:   0.125,
+        fall_end:   0.292,
+    };
+    // 22:00 (phase 0.917) should be in the peak window.
+    let val_late = rest.value_at(0.917);
+    assert!((val_late - 1.0).abs() < 1e-4,
+        "rest profile should be 1.0 at 22:00 (phase 0.917), got {val_late}");
+
+    // 02:00 (phase 0.083) should also be in the peak window (past midnight).
+    let val_early = rest.value_at(0.083);
+    assert!((val_early - 1.0).abs() < 1e-4,
+        "rest profile should be 1.0 at 02:00 (phase 0.083), got {val_early}");
+
+    // 12:00 (phase 0.5) should be zero.
+    let val_noon = rest.value_at(0.5);
+    assert!(val_noon < 0.05,
+        "rest profile should be zero at noon, got {val_noon}");
+}
+
+// ---------------------------------------------------------------------------
+// 8. Missing host observable — no silent fallback
+// ---------------------------------------------------------------------------
+
+#[test]
+fn missing_host_observable_returns_error() {
+    use abr_datafeel_dot::relational_loop::LoopError;
+
+    // Build a declaration with a Host-sourced locus.
+    let mut decl = minimal_declaration();
+    decl.loci.push(Locus {
+        id: "L-circadian".to_string(),
+        observable: "time_of_day_phase".to_string(),
+        source: LocusSource::Host,
+        basis: None,
+    });
+    let device = MockDevice::default_sequence();
+    let projection = ActuatorProjection::default();
+    let mut loop_ = RelationalLoop::new(decl, projection, Arc::clone(&device) as Arc<_>);
+
+    // Empty host_obs — time_of_day_phase is missing.
+    // V0.4: must return an error, not silently substitute 0.5.
+    let result = loop_.step(ObsProvenance::MockFixture, &Default::default());
+    assert!(
+        matches!(result, Err(LoopError::MissingHostObservable(_))),
+        "missing host observable must return LoopError::MissingHostObservable, got: {:?}", result
+    );
+}
+
+#[test]
+fn missing_origin_observable_returns_error() {
+    use abr_datafeel_dot::relational_loop::LoopError;
+
+    // Build a declaration with an Origin-sourced locus.
+    let mut decl = minimal_declaration();
+    decl.loci.push(Locus {
+        id: "L-activity".to_string(),
+        observable: "activity_profile".to_string(),
+        source: LocusSource::Origin(OriginSchedule {
+            derives_from: "time_of_day_phase".to_string(),
+            rise_start: 0.208,
+            peak_start: 0.25,
+            peak_end:   0.75,
+            fall_end:   0.833,
+        }),
+        basis: None,
+    });
+    let device = MockDevice::default_sequence();
+    let projection = ActuatorProjection::default();
+    let mut loop_ = RelationalLoop::new(decl, projection, Arc::clone(&device) as Arc<_>);
+
+    // Empty host_obs — time_of_day_phase (needed by L-activity's Origin schedule) is missing.
+    let result = loop_.step(ObsProvenance::MockFixture, &Default::default());
+    assert!(
+        matches!(result, Err(LoopError::MissingHostObservable(_))),
+        "missing origin observable must return LoopError::MissingHostObservable, got: {:?}", result
+    );
 }

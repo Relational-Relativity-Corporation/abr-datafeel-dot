@@ -65,6 +65,7 @@ used in cited experiments.
 | 2026-10-21 | Initial scaffold (V0.1) | 17/17 tests pass | Phases 1–4 buildable |
 | 2026-10-21 | V0.2: host locus, two profiles, comparative demo | 17/17 pass | cargo test conformance + replay |
 | 2026-10-21 | V0.3: ABR operator, circadian gate, multimodal resonance sweep | 17/17 pass | cargo test conformance + replay; demo sweep output verified |
+| 2026-10-21 | V0.4: Origin-declared schedules, CoActive rename, MissingHostObservable error, midnight continuity | 23/23 pass | 19 conformance + 4 replay; 20-step sweep verified; no simultaneous CO_ACTIVE (schedules complementary by design); evaluator provisional simulation label confirmed |
 
 ## Phase 5: Hardware Integration
 

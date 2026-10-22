@@ -29,10 +29,14 @@ pub enum DeclarationError {
 // Operator path
 // ---------------------------------------------------------------------------
 
-/// Which Kernel V8 operator path applies to a relation.
+/// Which operator path applies to a relation.
+///
+/// These correspond to Kernel V8 operator definitions; evaluation is
+/// provided by the provisional simulation in relational_loop.rs pending
+/// the abr-kernel crate integration (Phase 3).
 ///
 /// A→B→R requires a declared interior locus grounded in a physical
-/// observable. Primary Δ→Σ applies otherwise.
+/// observable or an Origin-computed schedule. Primary Δ→Σ applies otherwise.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OperatorPath {
@@ -41,14 +45,15 @@ pub enum OperatorPath {
     /// Full relational path through a declared interior locus.
     ///
     /// The interior locus ID must resolve to a declared Locus with
-    /// source = Device or Host (grounded observable).
+    /// source = Device, Host, or Origin (grounded or schedule-derived).
     ///
     /// gate_inverted: when false, gated output = raw_sigma × B (direct).
     ///               when true,  gated output = raw_sigma × (1−B) (inverse).
     ///
-    /// Use gate_inverted = true for profiles where the interior locus value
-    /// is LOW during the relevant phase (e.g. rest profile, where circadian
-    /// phase is low at night but the rest-mode output should be high).
+    /// For V0.4 and later: prefer declaring an Origin locus whose schedule
+    /// expresses the correct phase preference directly, keeping gate_inverted
+    /// false. Reserve gate_inverted for cases where a single interior locus
+    /// must drive complementary relations with opposing gate polarity.
     #[serde(rename = "abr")]
     ABR {
         interior_locus_id: String,
@@ -111,6 +116,76 @@ pub struct BoundaryConditions {
 }
 
 // ---------------------------------------------------------------------------
+// Origin schedule
+// ---------------------------------------------------------------------------
+
+/// Declared schedule for an Origin-sourced locus.
+///
+/// An Origin locus represents a profile function computed deterministically
+/// from a host-supplied clock observable (e.g. time_of_day_phase) and a
+/// declared trapezoidal schedule. It is grounded in the host clock, not
+/// synthetically constructed within the relational loop.
+///
+/// The schedule defines a cyclic trapezoidal window over normalised circadian
+/// phase [0.0, 1.0] where 0.0 = midnight = 1.0. The window:
+///   - rises linearly from 0 → 1 between rise_start and peak_start
+///   - holds at 1.0 between peak_start and peak_end
+///   - falls linearly from 1 → 0 between peak_end and fall_end
+///   - is 0.0 between fall_end and rise_start (zero region)
+///
+/// Wrapping schedules (where rise_start > fall_end) are handled correctly:
+/// the zero region is the daytime gap, and the active window spans midnight.
+/// Use these for rest profiles whose peak occurs around 00:00.
+///
+/// All phase values must be in [0.0, 1.0). The ordering constraint is:
+/// rise_start → peak_start → peak_end → fall_end (modulo 1.0, cyclic).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OriginSchedule {
+    /// Name of the host observable this schedule derives from.
+    /// Must be supplied by the host on every loop step (e.g. "time_of_day_phase").
+    pub derives_from: String,
+    /// Phase at which the profile value begins rising from 0.0.
+    pub rise_start: f32,
+    /// Phase at which the profile value reaches 1.0 (start of plateau).
+    pub peak_start: f32,
+    /// Phase at which the profile value begins falling from 1.0 (end of plateau).
+    pub peak_end: f32,
+    /// Phase at which the profile value reaches 0.0 (end of active window).
+    pub fall_end: f32,
+}
+
+impl OriginSchedule {
+    /// Evaluate the declared profile value at the given normalised circadian phase.
+    ///
+    /// Returns a value in [0.0, 1.0] using a cyclic trapezoidal window.
+    /// Phase is treated modulo 1.0 — values 0.0 and 1.0 produce identical output,
+    /// ensuring continuity across midnight.
+    pub fn value_at(&self, phase: f32) -> f32 {
+        let phase = phase.rem_euclid(1.0);
+
+        // Shift coordinates so rise_start maps to 0.0.
+        // rem_euclid handles the wrap-across-midnight case without branch logic.
+        let shifted = (phase - self.rise_start).rem_euclid(1.0);
+
+        let rise_width  = (self.peak_start - self.rise_start).rem_euclid(1.0);
+        let peak_width  = (self.peak_end   - self.peak_start).rem_euclid(1.0);
+        let fall_width  = (self.fall_end   - self.peak_end  ).rem_euclid(1.0);
+        let total_active = rise_width + peak_width + fall_width;
+
+        if shifted < rise_width {
+            if rise_width < f32::EPSILON { 1.0 } else { shifted / rise_width }
+        } else if shifted < rise_width + peak_width {
+            1.0
+        } else if shifted < total_active {
+            let into_fall = shifted - rise_width - peak_width;
+            if fall_width < f32::EPSILON { 0.0 } else { 1.0 - into_fall / fall_width }
+        } else {
+            0.0
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Locus
 // ---------------------------------------------------------------------------
 
@@ -127,6 +202,14 @@ pub enum LocusSource {
     /// sensor on the device, but its observables are not synthetically constructed
     /// within the relational loop itself.
     Host,
+    /// Value computed by the framework from a declared schedule and a host
+    /// clock observable. Grounded in the host-supplied time value; the schedule
+    /// is the Origin's declaration of what the value means in context.
+    ///
+    /// Origin loci are admissible as ABR interior loci because their value
+    /// is determined by a declared rule applied to a grounded clock observable,
+    /// not by the relational loop's own output.
+    Origin(OriginSchedule),
 }
 
 /// A declared locus — a specific observable quantity in the declared region.
@@ -196,7 +279,7 @@ impl MDeclaration {
     /// Validate admissibility rules:
     /// - Every relation's `from` and `to` must resolve to a declared locus.
     /// - A relation using OperatorPath::ABR must name an interior locus that
-    ///   exists and has source = Device or Host (not Actuator).
+    ///   exists and has source = Device, Host, or Origin (not Actuator).
     /// - No locus ID is duplicated.
     pub fn validate(&self) -> Result<(), DeclarationError> {
         // Check for duplicate locus IDs.
@@ -225,7 +308,7 @@ impl MDeclaration {
                 )));
             }
 
-            // If A→B→R, the interior locus must exist and be Device- or Host-sourced.
+            // If A→B→R, the interior locus must exist and be Device-, Host-, or Origin-sourced.
             if let OperatorPath::ABR { interior_locus_id, .. } = &rel.operator_path {
                 match locus_index.get(interior_locus_id.as_str()) {
                     None => {
@@ -234,10 +317,14 @@ impl MDeclaration {
                             rel.id, interior_locus_id
                         )));
                     }
-                    Some(locus) if !matches!(locus.source, LocusSource::Device | LocusSource::Host) => {
+                    Some(locus) if !matches!(
+                        locus.source,
+                        LocusSource::Device | LocusSource::Host | LocusSource::Origin(_)
+                    ) => {
                         return Err(DeclarationError::Inadmissible(format!(
-                            "relation {} claims A→B→R path but interior locus '{}' is not Device-sourced \
-                             or Host-sourced — an Actuator locus is not a grounded physical observable",
+                            "relation {} claims A→B→R path but interior locus '{}' is not \
+                             Device-, Host-, or Origin-sourced — an Actuator locus is not \
+                             a grounded observable",
                             rel.id, interior_locus_id
                         )));
                     }

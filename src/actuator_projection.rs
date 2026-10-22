@@ -80,16 +80,19 @@ impl Default for HardwareLimits {
 // Resonance
 // ---------------------------------------------------------------------------
 
-/// Multimodal resonance flag — indicates whether haptic and optical outputs
+/// Co-activity flag — indicates whether haptic and optical command outputs
 /// are simultaneously above a meaningful threshold in this step.
 ///
-/// This is a computed observation from the operator outputs, not a claim
-/// about physiological effect. It marks the region of the circadian sweep
-/// where both modalities are jointly expressing.
+/// This is a computed observation from the declared relational topology's
+/// outputs, not a claim about physiological effect. It marks where both
+/// modalities are jointly expressing above threshold in the circadian sweep.
+///
+/// Renamed from `Resonant` in V0.4 to avoid implying physiological resonance
+/// — this flag refers only to simultaneous command thresholds.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResonanceFlag {
     /// Both haptic and at least one optical channel are above threshold.
-    Resonant,
+    CoActive,
     /// Only one modality is above threshold.
     Partial,
     /// Neither modality is above threshold.
@@ -217,7 +220,7 @@ impl ActuatorProjection {
             || commands.optical.b > 10;
 
         match (haptic_active, optical_active) {
-            (true, true)  => ResonanceFlag::Resonant,
+            (true, true)  => ResonanceFlag::CoActive,
             (true, false) | (false, true) => ResonanceFlag::Partial,
             (false, false) => ResonanceFlag::Quiescent,
         }

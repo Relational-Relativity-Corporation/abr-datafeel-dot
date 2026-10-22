@@ -16,7 +16,21 @@
       "id": "L-circadian",
       "observable": "time_of_day_phase",
       "source": "host",
-      "basis": "Normalised time-of-day (0.0 = midnight, 1.0 = midnight). Activity phase approximately 0.25–0.75 (06:00–18:00 local). Host-supplied; not measured by the device. Used as the ABR interior locus (B) to gate both haptic and optical outputs: when circadian phase is high (daytime), the gate is open and thermal disturbances drive stronger multimodal output."
+      "basis": "Normalised time-of-day (0.0 = midnight, 1.0 = midnight). Host-supplied raw clock phase; not measured by the device. Used as the clock source for the Origin-derived L-activity locus. Not directly used as an ABR interior locus in V0.4."
+    },
+    {
+      "id": "L-activity",
+      "observable": "activity_profile",
+      "source": {
+        "origin": {
+          "derives_from": "time_of_day_phase",
+          "rise_start": 0.208,
+          "peak_start": 0.25,
+          "peak_end": 0.75,
+          "fall_end": 0.833
+        }
+      },
+      "basis": "Cyclic trapezoidal activity schedule derived from the host clock. Peaks at 1.0 from 06:00 (phase 0.25) to 18:00 (phase 0.75). Rises from 0 to 1 between 05:00 and 06:00 (phase 0.208–0.25). Falls from 1 to 0 between 18:00 and 20:00 (phase 0.75–0.833). Zero at all other times including midnight. Schedule is cyclic: value at phase=0.0 equals value at phase=1.0. Declared by Origin; not synthetically constructed within the relational loop."
     },
     {
       "id": "L-haptic",
@@ -36,15 +50,15 @@
       "id": "R-01",
       "from": "L-thermal",
       "to": "L-haptic",
-      "operator_path": {"abr": {"interior_locus_id": "L-circadian", "gate_inverted": false}},
-      "description": "Thermal disturbance (A) drives haptic amplitude (R) gated by circadian phase (B). During the activity phase (B high), thermal changes produce stronger haptic response. During the rest phase (B low), haptic output is suppressed. Same gate as R-02 — both modalities are coupled through the same circadian interior locus, producing multimodal resonance in the activity window."
+      "operator_path": {"abr": {"interior_locus_id": "L-activity", "gate_inverted": false}},
+      "description": "Thermal disturbance (A) drives haptic amplitude (R) gated by the declared activity profile (B = L-activity). During the activity schedule window (L-activity high, 06:00–18:00), thermal changes produce stronger haptic response. At midnight and during the rest window, L-activity is zero and haptic output is suppressed. Same gate as R-02 — both modalities are coupled through the same Origin interior locus, producing joint co-activity in the declared activity window."
     },
     {
       "id": "R-02",
       "from": "L-thermal",
       "to": "L-blue",
-      "operator_path": {"abr": {"interior_locus_id": "L-circadian", "gate_inverted": false}},
-      "description": "Thermal disturbance (A) drives blue optical output (R) gated by circadian phase (B). During the activity phase (B high), thermal changes produce blue-enriched illumination consistent with daytime circadian entrainment. The same circadian gate as R-01 means haptic and optical outputs are simultaneously expressed in the same circadian window — this is the area of multimodal intersection."
+      "operator_path": {"abr": {"interior_locus_id": "L-activity", "gate_inverted": false}},
+      "description": "Thermal disturbance (A) drives blue optical output (R) gated by the declared activity profile (B = L-activity). During the activity schedule window (L-activity high, 06:00–18:00), thermal changes produce blue-enriched illumination consistent with daytime circadian entrainment. The same Origin gate as R-01 means haptic and optical outputs are simultaneously expressed in the declared activity window — the area of multimodal co-activity."
     }
   ],
   "haptic_envelope": {
@@ -52,5 +66,5 @@
     "duration_ms_base": 30,
     "amplitude_scale": 1.0
   },
-  "provenance": "Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. V0.3 activity-associated profile. ABR operator with circadian interior locus. Scientific basis in docs/verification_record.md."
+  "provenance": "Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. V0.4 activity-associated profile. ABR operator with Origin-declared activity schedule interior locus. Scientific basis in docs/verification_record.md."
 }

@@ -16,7 +16,21 @@
       "id": "L-circadian",
       "observable": "time_of_day_phase",
       "source": "host",
-      "basis": "Normalised time-of-day (0.0 = midnight, 1.0 = midnight). Rest phase approximately 0.0–0.25 and 0.75–1.0. Host-supplied; not measured by the device. Used as the ABR interior locus (B) with gate inverted: when circadian phase is LOW (biological night), the inverted gate (1−B) is high, and thermal disturbances drive stronger multimodal rest output. This is the complement of the activity profile's gate."
+      "basis": "Normalised time-of-day (0.0 = midnight, 1.0 = midnight). Host-supplied raw clock phase; not measured by the device. Used as the clock source for the Origin-derived L-rest locus. Not directly used as an ABR interior locus in V0.4."
+    },
+    {
+      "id": "L-rest",
+      "observable": "rest_profile",
+      "source": {
+        "origin": {
+          "derives_from": "time_of_day_phase",
+          "rise_start": 0.792,
+          "peak_start": 0.875,
+          "peak_end": 0.125,
+          "fall_end": 0.292
+        }
+      },
+      "basis": "Cyclic trapezoidal rest schedule derived from the host clock. Wraps across midnight. Rises from 0 to 1 between 19:00 (phase 0.792) and 21:00 (phase 0.875). Peaks at 1.0 from 21:00 through midnight to 03:00 (phase 0.125). Falls from 1 to 0 between 03:00 and 07:00 (phase 0.125–0.292). Zero from 07:00 to 19:00 (daytime gap). Cyclic: value at phase=0.0 equals value at phase=1.0 (both 1.0 at midnight). Replaces the V0.3 gate_inverted=true mechanism — the schedule itself expresses the night-preference, keeping gate_inverted=false for clarity."
     },
     {
       "id": "L-haptic",
@@ -36,15 +50,15 @@
       "id": "R-01",
       "from": "L-thermal",
       "to": "L-haptic",
-      "operator_path": {"abr": {"interior_locus_id": "L-circadian", "gate_inverted": true}},
-      "description": "Thermal disturbance (A) drives haptic amplitude (R) gated by inverted circadian phase (1−B). During the rest phase (B low, 1−B high), thermal changes produce a gentler haptic response consistent with the rest profile envelope. Same inverted gate as R-02 — both modalities are simultaneously expressed during the rest phase, producing multimodal resonance in the biological night window."
+      "operator_path": {"abr": {"interior_locus_id": "L-rest", "gate_inverted": false}},
+      "description": "Thermal disturbance (A) drives haptic amplitude (R) gated by the declared rest profile (B = L-rest). During the rest schedule window (L-rest high, 21:00–03:00 peak, wrapping across midnight), thermal changes produce a gentler haptic response consistent with the rest profile envelope. At midday, L-rest is zero and haptic output is suppressed. Same gate as R-02 — both modalities are simultaneously expressed during the declared rest window."
     },
     {
       "id": "R-02",
       "from": "L-thermal",
       "to": "L-red",
-      "operator_path": {"abr": {"interior_locus_id": "L-circadian", "gate_inverted": true}},
-      "description": "Thermal disturbance (A) drives red optical output (R) gated by inverted circadian phase (1−B). During the rest phase (B low, 1−B high), thermal changes produce dim red illumination within the PBM wavelength range. The same inverted gate as R-01 means haptic and optical outputs are simultaneously expressed during biological night — the multimodal intersection complementary to the activity profile's daytime resonance window."
+      "operator_path": {"abr": {"interior_locus_id": "L-rest", "gate_inverted": false}},
+      "description": "Thermal disturbance (A) drives red optical output (R) gated by the declared rest profile (B = L-rest). During the rest schedule window (L-rest high, 21:00–03:00, wrapping across midnight), thermal changes produce dim red illumination within the PBM wavelength range. The same Origin gate as R-01 means haptic and optical outputs are simultaneously expressed during the biological night — the multimodal co-activity window complementary to the activity profile."
     }
   ],
   "haptic_envelope": {
@@ -52,5 +66,5 @@
     "duration_ms_base": 200,
     "amplitude_scale": 0.5
   },
-  "provenance": "Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. V0.3 rest-associated profile. ABR operator with inverted circadian interior locus. Scientific basis in docs/verification_record.md."
+  "provenance": "Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. V0.4 rest-associated profile. ABR operator with Origin-declared rest schedule interior locus. gate_inverted=false; night-preference expressed by schedule. Scientific basis in docs/verification_record.md."
 }
