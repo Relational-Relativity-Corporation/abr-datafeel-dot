@@ -69,6 +69,11 @@ pub enum LocusSource {
     Device,
     /// Last-commanded actuator value (not an independent sensor reading).
     Actuator,
+    /// Value from the host system / environment (e.g. time-of-day phase).
+    /// Treated as grounded for ABR admissibility — the host is not a physical
+    /// sensor on the device, but its observables are not synthetically constructed
+    /// within the relational loop itself.
+    Host,
 }
 
 /// A declared locus — a specific observable quantity in the declared region.
@@ -78,6 +83,12 @@ pub struct Locus {
     /// The name of the observable this locus tracks.
     pub observable: String,
     pub source: LocusSource,
+    /// Scientific or physiological basis for this locus.
+    /// Documents the established association between the observable and
+    /// the biological or physical process it represents.
+    /// Not a claim about device efficacy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basis: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -163,10 +174,10 @@ impl MDeclaration {
                             rel.id, interior_locus_id
                         )));
                     }
-                    Some(locus) if locus.source != LocusSource::Device => {
+                    Some(locus) if !matches!(locus.source, LocusSource::Device | LocusSource::Host) => {
                         return Err(DeclarationError::Inadmissible(format!(
-                            "relation {} claims A→B→R path but interior locus '{}' is not Device-sourced — \
-                             an Actuator locus is not a grounded physical observable",
+                            "relation {} claims A→B→R path but interior locus '{}' is not Device-sourced \
+                             or Host-sourced — an Actuator locus is not a grounded physical observable",
                             rel.id, interior_locus_id
                         )));
                     }

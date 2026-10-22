@@ -1,0 +1,51 @@
+{
+  "region": "DataFeel Dot contact surface — activity-associated profile",
+  "boundary_conditions": {
+    "temperature_range_c": [36.0, 40.0],
+    "vibration_hz": [160.0, 180.0],
+    "optical_nm": [455.0, 477.0]
+  },
+  "loci": [
+    {
+      "id": "L-thermal",
+      "observable": "thermistor_c",
+      "source": "device",
+      "basis": "NTC thermistor at contact surface. Mild warmth (36–40 °C) is associated with increased local metabolic activity and vasodilation. Thermoelectric element provides bidirectional control."
+    },
+    {
+      "id": "L-circadian",
+      "observable": "time_of_day_phase",
+      "source": "host",
+      "basis": "Normalised time-of-day (0.0 = midnight, 1.0 = midnight). Activity phase approximately 0.25–0.75 (06:00–18:00 local). Host-supplied; not measured by the device. Used to select circadian-appropriate optical output."
+    },
+    {
+      "id": "L-haptic",
+      "observable": "haptic_amplitude_normalized",
+      "source": "actuator",
+      "basis": "170 Hz resonant actuator. Pacinian corpuscles are most sensitive in the 200–300 Hz range; 170 Hz is within the activation window. Vibrotactile stimulation at moderate amplitude activates large-diameter Aβ afferents, consistent with gate-control analgesic pathways. Activity profile uses higher amplitude range."
+    },
+    {
+      "id": "L-blue",
+      "observable": "blue_intensity_normalized",
+      "source": "actuator",
+      "basis": "RGB blue channel, ~466 nm. Intrinsically photosensitive retinal ganglion cells (ipRGCs) expressing melanopsin have peak sensitivity near 480 nm; 466 nm is within the activation range. Blue-enriched illumination during the active phase is associated with circadian synchronisation and suppression of melatonin secretion (Brainard et al., 2001; Thapan et al., 2001). This association is retinal and systemic, not a local tissue effect of the Dot LED."
+    }
+  ],
+  "relations": [
+    {
+      "id": "R-01",
+      "from": "L-thermal",
+      "to": "L-haptic",
+      "operator_path": "primary_delta_sigma",
+      "description": "Thermal disturbance (Δ) drives haptic amplitude via accumulated sigma. A detected temperature change at the contact surface produces a coordinated vibrotactile response."
+    },
+    {
+      "id": "R-02",
+      "from": "L-circadian",
+      "to": "L-blue",
+      "operator_path": "primary_delta_sigma",
+      "description": "Circadian phase drives blue channel intensity. During the activity phase (higher time_of_day_phase value), blue output is proportional to the phase value, consistent with the role of blue-enriched light in daytime circadian entrainment."
+    }
+  ],
+  "provenance": "Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. V0.2 activity-associated profile. Scientific basis in docs/verification_record.md."
+}

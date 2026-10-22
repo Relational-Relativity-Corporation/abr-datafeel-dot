@@ -30,7 +30,7 @@ fn run_sequence(temps: Vec<f32>) -> Vec<(f32, f32)> {
     let mut loop_ = RelationalLoop::new(decl, projection, Arc::clone(&device) as Arc<_>);
     let mut results = Vec::new();
     for _ in 0..temps.len() {
-        let output = loop_.step(ObsProvenance::MockFixture).unwrap();
+        let output = loop_.step(ObsProvenance::MockFixture, &Default::default()).unwrap();
         results.push((
             output.state.delta_thermistor.unwrap_or(0.0),
             output.state.sigma_thermistor,

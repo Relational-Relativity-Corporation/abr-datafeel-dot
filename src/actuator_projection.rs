@@ -1,11 +1,25 @@
 // actuator_projection.rs
 //
-// ActuatorProjection — maps RelationalState to bounded device commands.
+// ActuatorProjection — maps RelationalState to bounded device commands,
+// using the declared relational topology to determine which locus values
+// drive which actuator channels.
 //
 // Every projection is explicit: which relational quantities are read,
 // which are discarded, and what the hardware bounds are. Nothing is
 // silently forwarded. Hardware limits are declared here and enforced
 // before any command reaches the device.
+//
+// The projection inspects the declaration's relations to route locus values
+// to actuator channels. Recognised target loci:
+//   "L-thermal" → ThermalCommand  (thermal feedback / homeostatic correction)
+//   "L-haptic"  → HapticCommand   (vibrotactile amplitude and duration)
+//   "L-red"     → OpticalCommand r channel (~626 nm)
+//   "L-green"   → OpticalCommand g channel (~530 nm)
+//   "L-blue"    → OpticalCommand b channel (~466 nm)
+//
+// Unknown target loci are silently ignored — the projection only acts on
+// what it knows how to map. This keeps the projection stable as declarations
+// evolve.
 //
 // The projection rules below are initial declarations for Phase 4 testing.
 // Origin must review and finalise these mappings against the actual
@@ -13,6 +27,7 @@
 
 use thiserror::Error;
 
+use crate::declaration::{MDeclaration, OperatorPath};
 use crate::device_interface::{
     CommandSet, HapticCommand, OpticalCommand, ThermalCommand, DeviceError,
 };
@@ -44,6 +59,8 @@ pub struct HardwareLimits {
     pub haptic_amplitude_max: f32,
     /// Maximum haptic pulse duration in ms.
     pub haptic_duration_max_ms: u32,
+    /// Maximum optical channel intensity (0–255).
+    pub optical_intensity_max: u8,
 }
 
 impl Default for HardwareLimits {
@@ -53,6 +70,7 @@ impl Default for HardwareLimits {
             thermal_power_max: 0.8,
             haptic_amplitude_max: 0.7,
             haptic_duration_max_ms: 500,
+            optical_intensity_max: 200,
         }
     }
 }
@@ -78,56 +96,95 @@ impl ActuatorProjection {
 
     /// Project a RelationalState to a CommandSet.
     ///
-    /// Mapping rationale (Phase 4 initial declarations, subject to Origin review):
+    /// Iterates the declaration's relations to determine which locus values
+    /// drive which actuator channels. For each relation:
     ///
-    /// Thermal:
-    ///   Read: delta_thermistor, sigma_thermistor
-    ///   Rule: oppose the observed Δ — if temperature rose, cool; if fell, heat.
-    ///         Magnitude proportional to |Δ|, capped at thermal_power_max.
-    ///   Discard: optical state, haptic state.
+    ///   PrimaryΔΣ  — the `from` locus's sigma/value in locus_values drives
+    ///                the `to` locus's actuator channel.
+    ///   ABR        — not evaluated in the Phase 1–4 stub; ABR relations are
+    ///                recorded in the declaration but deferred to Phase 3.
     ///
-    /// Haptic:
-    ///   Read: delta_thermistor
-    ///   Rule: amplitude = |Δ| normalised to [0, haptic_amplitude_max].
-    ///         Active on any nonzero Δ; duration proportional to |Δ|.
-    ///   Discard: sigma, optical state.
+    /// Channel mapping:
+    ///   "L-thermal" → thermal power (oppose delta: cooling on warming, heating on cooling)
+    ///   "L-haptic"  → haptic amplitude proportional to |driving value|
+    ///   "L-red"     → r channel intensity proportional to driving value
+    ///   "L-green"   → g channel intensity proportional to |driving value|
+    ///   "L-blue"    → b channel intensity proportional to driving value
     ///
-    /// Optical:
-    ///   Read: sigma_thermistor
-    ///   Rule: encode cumulative thermal drift as a colour shift.
-    ///         Positive sigma (warming) → warm hue; negative (cooling) → cool hue.
-    ///         Intensity scales with |sigma|.
-    ///   Discard: delta, haptic state.
-    pub fn project(&self, state: &RelationalState) -> Result<CommandSet, ProjectionError> {
+    /// All values are clamped to HardwareLimits before dispatch.
+    pub fn project(
+        &self,
+        state: &RelationalState,
+        decl: &MDeclaration,
+    ) -> Result<CommandSet, ProjectionError> {
         let delta = state.delta_thermistor.unwrap_or(0.0);
-        let sigma = state.sigma_thermistor;
+
+        // Accumulate optical channel contributions across all relations.
+        let mut r_sum: f32 = 0.0;
+        let mut g_sum: f32 = 0.0;
+        let mut b_sum: f32 = 0.0;
+        let mut thermal_power: f32 = 0.0;
+        let mut haptic_amplitude: f32 = 0.0;
+        let mut haptic_duration_ms: u32 = 0;
+
+        for rel in &decl.relations {
+            // Phase 1–4 stub: only evaluate PrimaryDeltaSigma relations.
+            if !matches!(rel.operator_path, OperatorPath::PrimaryDeltaSigma) {
+                continue;
+            }
+
+            // Get the driving value for this relation's source locus.
+            let driving = state.locus_values.get(&rel.from).copied().unwrap_or(0.0);
+
+            match rel.to.as_str() {
+                "L-thermal" => {
+                    // Oppose the thermal delta.
+                    if delta.abs() > f32::EPSILON {
+                        let raw = -delta.signum() * (delta.abs() / 5.0).min(1.0);
+                        thermal_power += raw;
+                    }
+                }
+                "L-haptic" => {
+                    // Amplitude proportional to |driving value|, scaled to [0, 1].
+                    haptic_amplitude += (driving.abs() / 3.0).min(1.0);
+                    haptic_duration_ms = haptic_duration_ms
+                        .max((driving.abs() * 50.0) as u32);
+                }
+                "L-red" => {
+                    // Intensity proportional to driving value (clamped positive).
+                    r_sum += (driving / 10.0).clamp(0.0, 1.0);
+                }
+                "L-green" => {
+                    g_sum += (driving.abs() / 10.0).min(1.0);
+                }
+                "L-blue" => {
+                    // Intensity proportional to driving value (clamped positive).
+                    b_sum += (driving / 10.0).clamp(0.0, 1.0);
+                }
+                _ => {
+                    // Unknown target locus — ignore. Declaration may include
+                    // loci not yet handled by this projection stub.
+                }
+            }
+        }
 
         // --- Thermal ---
-        let thermal_power = if delta.abs() < f32::EPSILON {
-            0.0
-        } else {
-            // Oppose the observed change, scaled by magnitude.
-            let raw = -delta.signum() * (delta.abs() / 5.0).min(1.0);
-            raw.clamp(-self.limits.thermal_power_max, self.limits.thermal_power_max)
-        };
+        let thermal_power =
+            thermal_power.clamp(-self.limits.thermal_power_max, self.limits.thermal_power_max);
         let thermal = ThermalCommand::new(thermal_power)?;
 
         // --- Haptic ---
-        let haptic_amplitude = (delta.abs() / 3.0)
-            .min(self.limits.haptic_amplitude_max);
-        let haptic_duration_ms = ((delta.abs() * 50.0) as u32)
-            .min(self.limits.haptic_duration_max_ms);
+        let haptic_amplitude =
+            haptic_amplitude.min(self.limits.haptic_amplitude_max);
+        let haptic_duration_ms =
+            haptic_duration_ms.min(self.limits.haptic_duration_max_ms);
         let haptic = HapticCommand::new(haptic_amplitude, haptic_duration_ms)?;
 
         // --- Optical ---
-        // Warm hue (red dominant): sigma > 0 (cumulative warming)
-        // Cool hue (blue dominant): sigma < 0 (cumulative cooling)
-        let intensity = (sigma.abs() / 10.0).min(1.0);
-        let (r, g, b) = if sigma >= 0.0 {
-            ((intensity * 220.0) as u8, (intensity * 80.0) as u8, (intensity * 30.0) as u8)
-        } else {
-            ((intensity * 30.0) as u8, (intensity * 80.0) as u8, (intensity * 220.0) as u8)
-        };
+        let max_ch = self.limits.optical_intensity_max as f32;
+        let r = (r_sum.min(1.0) * max_ch) as u8;
+        let g = (g_sum.min(1.0) * max_ch) as u8;
+        let b = (b_sum.min(1.0) * max_ch) as u8;
         let optical = OpticalCommand { r, g, b, timing_ms: 100 };
 
         Ok(CommandSet { thermal, haptic, optical })

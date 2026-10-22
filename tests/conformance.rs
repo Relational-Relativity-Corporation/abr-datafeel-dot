@@ -32,8 +32,8 @@ fn minimal_declaration() -> MDeclaration {
             optical_nm: [466.0, 626.0],
         },
         loci: vec![
-            Locus { id: "L-thermal".to_string(), observable: "thermistor_c".to_string(), source: LocusSource::Device },
-            Locus { id: "L-haptic".to_string(),  observable: "haptic_amplitude".to_string(), source: LocusSource::Actuator },
+            Locus { id: "L-thermal".to_string(), observable: "thermistor_c".to_string(), source: LocusSource::Device, basis: None },
+            Locus { id: "L-haptic".to_string(),  observable: "haptic_amplitude".to_string(), source: LocusSource::Actuator, basis: None },
         ],
         relations: vec![
             Relation {
@@ -105,6 +105,7 @@ fn declaration_rejects_duplicate_locus_ids() {
         id: "L-thermal".to_string(),
         observable: "duplicate".to_string(),
         source: LocusSource::Device,
+        basis: None,
     });
     assert!(decl.validate().is_err());
 }
@@ -131,7 +132,7 @@ fn abr_path_rejected_with_actuator_interior_locus() {
         interior_locus_id: "L-haptic".to_string(),
     };
     let err = decl.validate().unwrap_err();
-    assert!(err.to_string().contains("not Device-sourced"));
+    assert!(err.to_string().contains("not Device-sourced or Host-sourced"));
 }
 
 #[test]
@@ -157,7 +158,7 @@ fn mock_fixture_observations_do_not_update_prior_state() {
 
     // Run several MockFixture steps.
     for _ in 0..5 {
-        loop_.step(ObsProvenance::MockFixture).unwrap();
+        loop_.step(ObsProvenance::MockFixture, &Default::default()).unwrap();
     }
 
     // prior_state must still be None — MockFixture does not accumulate state.
@@ -172,7 +173,7 @@ fn physical_observations_do_update_prior_state() {
     let projection = ActuatorProjection::default();
     let mut loop_ = RelationalLoop::new(decl, projection, Arc::clone(&device) as Arc<_>);
 
-    loop_.step(ObsProvenance::Physical).unwrap();
+    loop_.step(ObsProvenance::Physical, &Default::default()).unwrap();
 
     assert!(loop_.prior_state().is_some(),
         "prior_state must be set after a Physical observation");
@@ -194,13 +195,18 @@ fn projection_commands_stay_within_hardware_limits() {
 
     // Construct a state with an extreme delta to test clamping.
     let obs = Observation::mock_fixture(45.0, ActuatorState::default());
+    let mut locus_values = std::collections::HashMap::new();
+    locus_values.insert("L-thermal".to_string(), 20.0_f32);
+    locus_values.insert("L-haptic".to_string(), 20.0_f32);
     let state = RelationalState {
         source_observation: obs,
         delta_thermistor: Some(20.0),  // large disturbance
         sigma_thermistor: 20.0,
+        locus_values,
     };
 
-    let cmds = projection.project(&state).unwrap();
+    let decl = minimal_declaration();
+    let cmds = projection.project(&state, &decl).unwrap();
     assert!(cmds.thermal.power.abs() <= limits.thermal_power_max,
         "thermal power exceeded hardware limit");
     assert!(cmds.haptic.amplitude <= limits.haptic_amplitude_max,

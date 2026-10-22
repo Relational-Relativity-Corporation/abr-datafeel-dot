@@ -4,13 +4,14 @@
 //
 // Kernel V8 integration is stubbed here pending the abr-kernel crate being
 // added as a pinned dependency (Phase 3). The stub preserves the interface
-// so that Phase 1–2 conformance tests can run against the full loop structure.
+// so that Phase 1–4 conformance tests can run against the full loop structure.
 //
 // KEY INVARIANT: prior_state is NEVER initialised synthetically.
 // The first step runs with prior_state = None. RelationalState accumulates
 // only from completed Physical observations. MockFixture observations do not
 // update prior_state.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -18,6 +19,17 @@ use crate::device_interface::{ActuatorState, CommandSet, DeviceInterface, Device
 use crate::observation::{Observation, ObsProvenance};
 use crate::declaration::MDeclaration;
 use crate::actuator_projection::{ActuatorProjection, ProjectionError};
+
+// ---------------------------------------------------------------------------
+// Host observables
+// ---------------------------------------------------------------------------
+
+/// Key–value map of observables provided by the host system.
+///
+/// These are loci declared with `LocusSource::Host` — values the device
+/// itself cannot read but the host can supply (e.g. time_of_day_phase).
+/// Pass an empty map when the declaration contains no Host-sourced loci.
+pub type HostObservables = HashMap<String, f32>;
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -49,16 +61,20 @@ pub struct RelationalState {
     pub source_observation: Observation,
     /// Δ (difference) from the previous thermistor reading, if one exists.
     pub delta_thermistor: Option<f32>,
-    /// Σ (accumulation) of Δ values over completed physical steps.
+    /// Σ (accumulation) of Δ values over all steps (Physical and MockFixture).
     pub sigma_thermistor: f32,
+    /// Per-locus computed values (sigma or raw, depending on locus type).
+    /// Key: locus ID from the declaration.
+    /// Value: the operator output driving that locus's actuator target.
+    pub locus_values: HashMap<String, f32>,
 }
 
 /// Full output of one loop step, including the state to carry forward
 /// and the commands dispatched to the device.
 #[derive(Debug, Clone)]
 pub struct StepOutput {
-    pub state:    RelationalState,
-    pub commands: CommandSet,
+    pub state:       RelationalState,
+    pub commands:    CommandSet,
     /// Observation that was the input to this step.
     pub observation: Observation,
 }
@@ -106,12 +122,19 @@ impl RelationalLoop {
     /// Execute one step of the relational loop.
     ///
     /// 1. Read thermistor from device.
-    /// 2. Construct Observation (Physical or MockFixture per device type).
+    /// 2. Construct Observation (Physical or MockFixture per provenance).
     /// 3. Evaluate Kernel V8 operators against declared topology and prior state.
     /// 4. Project relational output to actuator commands.
     /// 5. Dispatch commands to device.
     /// 6. Update prior_state (Physical observations only).
-    pub fn step(&mut self, provenance: ObsProvenance) -> Result<StepOutput, LoopError> {
+    ///
+    /// `host_obs` supplies values for Host-sourced loci declared in the M
+    /// (e.g. `time_of_day_phase`). Pass `&Default::default()` when unused.
+    pub fn step(
+        &mut self,
+        provenance: ObsProvenance,
+        host_obs: &HostObservables,
+    ) -> Result<StepOutput, LoopError> {
         // 1. Read sensor.
         let thermistor_c = self.device.read_thermistor()?;
 
@@ -124,10 +147,10 @@ impl RelationalLoop {
         };
 
         // 3. Evaluate — Kernel V8 stub (Phase 3 will replace this block).
-        let state = self.evaluate_stub(&observation);
+        let state = self.evaluate_stub(&observation, host_obs);
 
         // 4. Project to actuator commands.
-        let commands = self.projection.project(&state)?;
+        let commands = self.projection.project(&state, &self.declaration)?;
 
         // 5. Dispatch commands.
         self.device.set_thermal(commands.thermal.clone())?;
@@ -149,25 +172,63 @@ impl RelationalLoop {
         Ok(StepOutput { state, commands, observation })
     }
 
-    /// Kernel V8 stub — implements Primary Δ→Σ for the thermistor locus.
+    /// Kernel V8 stub — implements Primary Δ→Σ for all declared loci.
     /// Replaced in Phase 3 when abr-kernel is added as a pinned dependency.
-    fn evaluate_stub(&self, obs: &Observation) -> RelationalState {
-        // Use step_state for continuity: delta and sigma advance every step
-        // regardless of provenance. prior_state is the verification anchor
-        // (Physical only) and is not consulted here.
+    ///
+    /// For Device-sourced loci (thermistor): compute delta from step_state,
+    /// accumulate sigma.
+    ///
+    /// For Host-sourced loci (e.g. time_of_day_phase): read raw value from
+    /// host_obs. No delta/sigma — host observables are environmental context,
+    /// not time-series sensor readings.
+    ///
+    /// For Actuator-sourced loci: value is the last-commanded normalized
+    /// amplitude, carried from actuator_state.
+    fn evaluate_stub(
+        &self,
+        obs: &Observation,
+        host_obs: &HostObservables,
+    ) -> RelationalState {
+        use crate::declaration::LocusSource;
+
+        // Thermal delta and sigma (primary device locus).
         let delta = self.step_state.as_ref().map(|prior| {
             obs.thermistor_c - prior.source_observation.thermistor_c
         });
-
         let sigma = match (&self.step_state, delta) {
             (Some(prior), Some(d)) => prior.sigma_thermistor + d,
             _ => 0.0,
         };
 
+        // Build per-locus values for the declared topology.
+        let mut locus_values: HashMap<String, f32> = HashMap::new();
+
+        for locus in &self.declaration.loci {
+            let value = match locus.source {
+                LocusSource::Device => {
+                    // Only thermistor_c is declared for now; use sigma as the
+                    // operator output (accumulated delta over the run).
+                    sigma
+                }
+                LocusSource::Host => {
+                    // Read from host_obs; default to 0.5 (neutral) if absent.
+                    *host_obs.get(&locus.observable).unwrap_or(&0.5)
+                }
+                LocusSource::Actuator => {
+                    // Last-commanded normalized value. For now, use 0.0 (no
+                    // prior command). Phase 3 will carry actuator state through
+                    // the kernel evaluation.
+                    0.0
+                }
+            };
+            locus_values.insert(locus.id.clone(), value);
+        }
+
         RelationalState {
             source_observation: obs.clone(),
             delta_thermistor: delta,
             sigma_thermistor: sigma,
+            locus_values,
         }
     }
 

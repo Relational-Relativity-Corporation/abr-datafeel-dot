@@ -1,0 +1,51 @@
+{
+  "region": "DataFeel Dot contact surface — rest-associated profile",
+  "boundary_conditions": {
+    "temperature_range_c": [20.0, 37.0],
+    "vibration_hz": [160.0, 180.0],
+    "optical_nm": [600.0, 626.0]
+  },
+  "loci": [
+    {
+      "id": "L-thermal",
+      "observable": "thermistor_c",
+      "source": "device",
+      "basis": "NTC thermistor at contact surface. Distal skin temperature rises slightly at sleep onset as core body temperature decreases (Van Someren, 2006). Gentle thermal modulation in this profile targets the 20–37 °C range without active warming above physiological neutral."
+    },
+    {
+      "id": "L-circadian",
+      "observable": "time_of_day_phase",
+      "source": "host",
+      "basis": "Normalised time-of-day (0.0 = midnight, 1.0 = midnight). Rest phase approximately 0.0–0.25 and 0.75–1.0. Host-supplied; not measured by the device. During the rest phase the value is low (near 0 or 1), which maps to low red intensity — dim output consistent with the low-light environment appropriate for biological night."
+    },
+    {
+      "id": "L-haptic",
+      "observable": "haptic_amplitude_normalized",
+      "source": "actuator",
+      "basis": "170 Hz resonant actuator. Rest profile uses lower amplitude range than the activity profile. Low-amplitude vibrotactile stimulation at 170 Hz may support mechanotransduction in superficial tissue without arousal-level sensory activation."
+    },
+    {
+      "id": "L-red",
+      "observable": "red_intensity_normalized",
+      "source": "actuator",
+      "basis": "RGB red channel, ~626 nm. The photobiomodulation (PBM) literature documents local tissue effects of 600–700 nm light via cytochrome c oxidase activation, including increased ATP production and anti-inflammatory cytokine modulation (Hamblin, 2016; Karu, 2010). 626 nm is at the lower boundary of this window. This is a local tissue mechanism, distinct from the retinal circadian signalling pathway activated by blue light. Dim output in the rest profile avoids retinal stimulation while remaining within the documented PBM wavelength range."
+    }
+  ],
+  "relations": [
+    {
+      "id": "R-01",
+      "from": "L-thermal",
+      "to": "L-haptic",
+      "operator_path": "primary_delta_sigma",
+      "description": "Thermal disturbance (Δ) drives haptic amplitude via accumulated sigma. Same structural relation as the activity profile; the rest profile constrains the result to a lower amplitude range via hardware limits."
+    },
+    {
+      "id": "R-02",
+      "from": "L-circadian",
+      "to": "L-red",
+      "operator_path": "primary_delta_sigma",
+      "description": "Circadian phase drives red channel intensity. During the rest phase the time_of_day_phase value is low (near 0 or 1), producing dim red output. As the value increases toward the activity phase transition, red intensity decreases — the profile hands off optical output to the activity profile's blue channel."
+    }
+  ],
+  "provenance": "Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. V0.2 rest-associated profile. Scientific basis in docs/verification_record.md."
+}
