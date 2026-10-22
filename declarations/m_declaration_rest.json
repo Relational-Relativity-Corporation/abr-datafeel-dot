@@ -16,13 +16,13 @@
       "id": "L-circadian",
       "observable": "time_of_day_phase",
       "source": "host",
-      "basis": "Normalised time-of-day (0.0 = midnight, 1.0 = midnight). Rest phase approximately 0.0–0.25 and 0.75–1.0. Host-supplied; not measured by the device. During the rest phase the value is low (near 0 or 1), which maps to low red intensity — dim output consistent with the low-light environment appropriate for biological night."
+      "basis": "Normalised time-of-day (0.0 = midnight, 1.0 = midnight). Rest phase approximately 0.0–0.25 and 0.75–1.0. Host-supplied; not measured by the device. Used as the ABR interior locus (B) with gate inverted: when circadian phase is LOW (biological night), the inverted gate (1−B) is high, and thermal disturbances drive stronger multimodal rest output. This is the complement of the activity profile's gate."
     },
     {
       "id": "L-haptic",
       "observable": "haptic_amplitude_normalized",
       "source": "actuator",
-      "basis": "170 Hz resonant actuator. Rest profile uses lower amplitude range than the activity profile. Low-amplitude vibrotactile stimulation at 170 Hz may support mechanotransduction in superficial tissue without arousal-level sensory activation."
+      "basis": "170 Hz resonant actuator. Rest profile uses lower amplitude and longer pulse duration than the activity profile. Low-amplitude vibrotactile stimulation at 170 Hz may support mechanotransduction in superficial tissue without arousal-level sensory activation."
     },
     {
       "id": "L-red",
@@ -36,16 +36,21 @@
       "id": "R-01",
       "from": "L-thermal",
       "to": "L-haptic",
-      "operator_path": "primary_delta_sigma",
-      "description": "Thermal disturbance (Δ) drives haptic amplitude via accumulated sigma. Same structural relation as the activity profile; the rest profile constrains the result to a lower amplitude range via hardware limits."
+      "operator_path": {"abr": {"interior_locus_id": "L-circadian", "gate_inverted": true}},
+      "description": "Thermal disturbance (A) drives haptic amplitude (R) gated by inverted circadian phase (1−B). During the rest phase (B low, 1−B high), thermal changes produce a gentler haptic response consistent with the rest profile envelope. Same inverted gate as R-02 — both modalities are simultaneously expressed during the rest phase, producing multimodal resonance in the biological night window."
     },
     {
       "id": "R-02",
-      "from": "L-circadian",
+      "from": "L-thermal",
       "to": "L-red",
-      "operator_path": "primary_delta_sigma",
-      "description": "Circadian phase drives red channel intensity. During the rest phase the time_of_day_phase value is low (near 0 or 1), producing dim red output. As the value increases toward the activity phase transition, red intensity decreases — the profile hands off optical output to the activity profile's blue channel."
+      "operator_path": {"abr": {"interior_locus_id": "L-circadian", "gate_inverted": true}},
+      "description": "Thermal disturbance (A) drives red optical output (R) gated by inverted circadian phase (1−B). During the rest phase (B low, 1−B high), thermal changes produce dim red illumination within the PBM wavelength range. The same inverted gate as R-01 means haptic and optical outputs are simultaneously expressed during biological night — the multimodal intersection complementary to the activity profile's daytime resonance window."
     }
   ],
-  "provenance": "Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. V0.2 rest-associated profile. Scientific basis in docs/verification_record.md."
+  "haptic_envelope": {
+    "carrier_hz": 170.0,
+    "duration_ms_base": 200,
+    "amplitude_scale": 0.5
+  },
+  "provenance": "Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. V0.3 rest-associated profile. ABR operator with inverted circadian interior locus. Scientific basis in docs/verification_record.md."
 }

@@ -10,6 +10,12 @@
 // The first step runs with prior_state = None. RelationalState accumulates
 // only from completed Physical observations. MockFixture observations do not
 // update prior_state.
+//
+// Per-locus tracking: the loop maintains raw sigma per relation across steps
+// (in step_state.relation_outputs[rel.id].raw_sigma). This enables the ABR
+// gate to be applied to the accumulated ungated sigma at each step, producing
+// a gated output that reflects both the history of the source locus and the
+// current state of the interior locus.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,7 +23,7 @@ use thiserror::Error;
 
 use crate::device_interface::{ActuatorState, CommandSet, DeviceInterface, DeviceError};
 use crate::observation::{Observation, ObsProvenance};
-use crate::declaration::MDeclaration;
+use crate::declaration::{MDeclaration, OperatorPath, LocusSource};
 use crate::actuator_projection::{ActuatorProjection, ProjectionError};
 
 // ---------------------------------------------------------------------------
@@ -46,6 +52,26 @@ pub enum LoopError {
 }
 
 // ---------------------------------------------------------------------------
+// Operator output
+// ---------------------------------------------------------------------------
+
+/// Output from one Kernel V8 operator evaluation for a single relation.
+///
+/// raw_sigma: ungated accumulation of delta values — carries the history of
+///            the source locus regardless of any ABR gate state.
+/// sigma:     the output used by the projection — equals raw_sigma for
+///            PrimaryDeltaSigma; for ABR, equals raw_sigma × gate(B).
+#[derive(Debug, Clone, Default)]
+pub struct OperatorOutput {
+    /// Δ from the previous step for the source locus. None on first step.
+    pub delta: Option<f32>,
+    /// Ungated Σ — accumulates regardless of ABR interior locus value.
+    pub raw_sigma: f32,
+    /// Gated Σ — what the projection reads. For ABR: raw_sigma × gate(B).
+    pub sigma: f32,
+}
+
+// ---------------------------------------------------------------------------
 // Relational state
 // ---------------------------------------------------------------------------
 
@@ -60,13 +86,16 @@ pub struct RelationalState {
     /// The observation that produced this state.
     pub source_observation: Observation,
     /// Δ (difference) from the previous thermistor reading, if one exists.
+    /// Backward-compat field — derived from the first Device-source relation.
     pub delta_thermistor: Option<f32>,
-    /// Σ (accumulation) of Δ values over all steps (Physical and MockFixture).
+    /// Σ (accumulation) backward-compat field — derived from R-01 sigma.
     pub sigma_thermistor: f32,
-    /// Per-locus computed values (sigma or raw, depending on locus type).
-    /// Key: locus ID from the declaration.
-    /// Value: the operator output driving that locus's actuator target.
+    /// Current raw value of each declared locus (thermistor_c, phase value, etc.).
+    /// Key: locus ID.
     pub locus_values: HashMap<String, f32>,
+    /// Per-relation operator outputs. Key: relation ID.
+    /// The projection reads these to determine actuator driving values.
+    pub relation_outputs: HashMap<String, OperatorOutput>,
 }
 
 /// Full output of one loop step, including the state to carry forward
@@ -95,7 +124,7 @@ pub struct RelationalLoop {
     prior_state: Option<RelationalState>,
 
     /// Most recent step state, regardless of provenance.
-    /// Used by evaluate_stub to compute Δ and Σ continuity within a run.
+    /// Used by evaluate_stub to compute Δ, Σ, and per-relation raw sigmas.
     /// Distinct from prior_state: this is not a verification record.
     step_state: Option<RelationalState>,
 
@@ -172,63 +201,87 @@ impl RelationalLoop {
         Ok(StepOutput { state, commands, observation })
     }
 
-    /// Kernel V8 stub — implements Primary Δ→Σ for all declared loci.
+    /// Kernel V8 stub — implements PrimaryΔΣ and ABR for all declared relations.
     /// Replaced in Phase 3 when abr-kernel is added as a pinned dependency.
     ///
-    /// For Device-sourced loci (thermistor): compute delta from step_state,
-    /// accumulate sigma.
+    /// For each declared relation:
     ///
-    /// For Host-sourced loci (e.g. time_of_day_phase): read raw value from
-    /// host_obs. No delta/sigma — host observables are environmental context,
-    /// not time-series sensor readings.
+    ///   PrimaryΔΣ — reads the source locus value (Device or Host), computes
+    ///               Δ from the prior step's value, accumulates Σ. Output = Σ.
     ///
-    /// For Actuator-sourced loci: value is the last-commanded normalized
-    /// amplitude, carried from actuator_state.
+    ///   ABR       — reads the source locus (A) and interior locus (B).
+    ///               Computes raw Σ for A as above. Applies gate:
+    ///                 gate_inverted=false → output = raw_Σ × B
+    ///                 gate_inverted=true  → output = raw_Σ × (1−B)
+    ///               The gate couples the modality output to the circadian
+    ///               (or other interior) locus state.
+    ///
+    /// raw_sigma is preserved across steps in step_state.relation_outputs,
+    /// so the ungated history of the source locus is always available.
     fn evaluate_stub(
         &self,
         obs: &Observation,
         host_obs: &HostObservables,
     ) -> RelationalState {
-        use crate::declaration::LocusSource;
-
-        // Thermal delta and sigma (primary device locus).
-        let delta = self.step_state.as_ref().map(|prior| {
-            obs.thermistor_c - prior.source_observation.thermistor_c
-        });
-        let sigma = match (&self.step_state, delta) {
-            (Some(prior), Some(d)) => prior.sigma_thermistor + d,
-            _ => 0.0,
-        };
-
-        // Build per-locus values for the declared topology.
+        // 1. Read current raw value for every declared locus.
         let mut locus_values: HashMap<String, f32> = HashMap::new();
-
         for locus in &self.declaration.loci {
-            let value = match locus.source {
-                LocusSource::Device => {
-                    // Only thermistor_c is declared for now; use sigma as the
-                    // operator output (accumulated delta over the run).
-                    sigma
-                }
-                LocusSource::Host => {
-                    // Read from host_obs; default to 0.5 (neutral) if absent.
-                    *host_obs.get(&locus.observable).unwrap_or(&0.5)
-                }
-                LocusSource::Actuator => {
-                    // Last-commanded normalized value. For now, use 0.0 (no
-                    // prior command). Phase 3 will carry actuator state through
-                    // the kernel evaluation.
-                    0.0
+            let val = match locus.source {
+                LocusSource::Device => obs.thermistor_c,
+                LocusSource::Host   => *host_obs.get(&locus.observable).unwrap_or(&0.5),
+                LocusSource::Actuator => 0.0,
+            };
+            locus_values.insert(locus.id.clone(), val);
+        }
+
+        // 2. For each relation, compute the operator output.
+        let mut relation_outputs: HashMap<String, OperatorOutput> = HashMap::new();
+
+        for rel in &self.declaration.relations {
+            let current_from = *locus_values.get(&rel.from).unwrap_or(&0.0);
+
+            // Delta: difference from prior step's raw value for the source locus.
+            let prior_from = self.step_state.as_ref()
+                .and_then(|s| s.locus_values.get(&rel.from).copied());
+            let delta = prior_from.map(|p| current_from - p);
+
+            // Raw sigma: carry from step_state, then add this step's delta.
+            let prior_raw_sigma = self.step_state.as_ref()
+                .and_then(|s| s.relation_outputs.get(&rel.id))
+                .map(|o| o.raw_sigma)
+                .unwrap_or(0.0);
+            let raw_sigma = prior_raw_sigma + delta.unwrap_or(0.0);
+
+            // Gated sigma — operator-specific.
+            let sigma = match &rel.operator_path {
+                OperatorPath::PrimaryDeltaSigma => raw_sigma,
+                OperatorPath::ABR { interior_locus_id, gate_inverted } => {
+                    let b = *locus_values.get(interior_locus_id).unwrap_or(&0.5);
+                    let gate = if *gate_inverted { 1.0 - b } else { b };
+                    raw_sigma * gate
                 }
             };
-            locus_values.insert(locus.id.clone(), value);
+
+            relation_outputs.insert(rel.id.clone(), OperatorOutput { delta, raw_sigma, sigma });
         }
+
+        // 3. Backward-compat fields — derived from the first Device-sourced relation.
+        let (delta_thermistor, sigma_thermistor) = self.declaration.relations.iter()
+            .find(|r| {
+                self.declaration.locus(&r.from)
+                    .map(|l| matches!(l.source, LocusSource::Device))
+                    .unwrap_or(false)
+            })
+            .and_then(|r| relation_outputs.get(&r.id))
+            .map(|o| (o.delta, o.raw_sigma))  // raw_sigma for compat (replay tests)
+            .unwrap_or((None, 0.0));
 
         RelationalState {
             source_observation: obs.clone(),
-            delta_thermistor: delta,
-            sigma_thermistor: sigma,
+            delta_thermistor,
+            sigma_thermistor,
             locus_values,
+            relation_outputs,
         }
     }
 

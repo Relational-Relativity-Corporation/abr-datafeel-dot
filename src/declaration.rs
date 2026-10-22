@@ -39,8 +39,61 @@ pub enum OperatorPath {
     /// Primary difference and accumulation — no interior locus required.
     PrimaryDeltaSigma,
     /// Full relational path through a declared interior locus.
-    /// The locus ID must resolve to a declared Locus with source = Device.
-    ABR { interior_locus_id: String },
+    ///
+    /// The interior locus ID must resolve to a declared Locus with
+    /// source = Device or Host (grounded observable).
+    ///
+    /// gate_inverted: when false, gated output = raw_sigma × B (direct).
+    ///               when true,  gated output = raw_sigma × (1−B) (inverse).
+    ///
+    /// Use gate_inverted = true for profiles where the interior locus value
+    /// is LOW during the relevant phase (e.g. rest profile, where circadian
+    /// phase is low at night but the rest-mode output should be high).
+    #[serde(rename = "abr")]
+    ABR {
+        interior_locus_id: String,
+        #[serde(default)]
+        gate_inverted: bool,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Haptic envelope
+// ---------------------------------------------------------------------------
+
+/// Haptic pulse envelope parameters for a declared profile.
+///
+/// The DataFeel Dot operates at 170 Hz as the mechanical carrier.
+/// Profiles differentiate through amplitude scale and pulse duration,
+/// not carrier frequency — carrier is fixed at the actuator's rated resonance.
+///
+/// These are experimental sensory configurations.
+/// They are not established therapeutic prescriptions.
+/// The 150–200 Hz operating range may be swept once physical actuator
+/// measurements are available.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HapticEnvelope {
+    /// Mechanical carrier frequency in Hz. 170.0 for the DataFeel Dot.
+    pub carrier_hz: f32,
+    /// Base pulse width in milliseconds, before amplitude scaling.
+    /// Activity profile: shorter (assertive bursts).
+    /// Rest profile:     longer (gentle, sustained).
+    pub duration_ms_base: u32,
+    /// Amplitude scale factor applied to the projected operator output.
+    /// Activity profile: 1.0 (full scale).
+    /// Rest profile:     0.5 (reduced to avoid arousal-level activation).
+    pub amplitude_scale: f32,
+}
+
+impl Default for HapticEnvelope {
+    fn default() -> Self {
+        // Neutral defaults — used when declaration omits haptic_envelope.
+        Self {
+            carrier_hz: 170.0,
+            duration_ms_base: 50,
+            amplitude_scale: 1.0,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +122,7 @@ pub enum LocusSource {
     Device,
     /// Last-commanded actuator value (not an independent sensor reading).
     Actuator,
-    /// Value from the host system / environment (e.g. time-of-day phase).
+    /// Value from the host system / environment (e.g. time_of_day_phase).
     /// Treated as grounded for ABR admissibility — the host is not a physical
     /// sensor on the device, but its observables are not synthetically constructed
     /// within the relational loop itself.
@@ -105,6 +158,9 @@ pub struct Relation {
     pub to: String,
     /// Operator path — validated against declared loci on load.
     pub operator_path: OperatorPath,
+    /// Optional description of the relational coupling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -120,6 +176,10 @@ pub struct MDeclaration {
     pub boundary_conditions: BoundaryConditions,
     pub loci: Vec<Locus>,
     pub relations: Vec<Relation>,
+    /// Haptic pulse envelope — differentiates profiles at same carrier frequency.
+    /// Defaults to neutral values when omitted.
+    #[serde(default)]
+    pub haptic_envelope: HapticEnvelope,
     /// Origin statement — who declared this M and when.
     pub provenance: String,
 }
@@ -136,7 +196,7 @@ impl MDeclaration {
     /// Validate admissibility rules:
     /// - Every relation's `from` and `to` must resolve to a declared locus.
     /// - A relation using OperatorPath::ABR must name an interior locus that
-    ///   exists and has source = Device (not Actuator).
+    ///   exists and has source = Device or Host (not Actuator).
     /// - No locus ID is duplicated.
     pub fn validate(&self) -> Result<(), DeclarationError> {
         // Check for duplicate locus IDs.
@@ -165,8 +225,8 @@ impl MDeclaration {
                 )));
             }
 
-            // If A→B→R, the interior locus must exist and be Device-sourced.
-            if let OperatorPath::ABR { interior_locus_id } = &rel.operator_path {
+            // If A→B→R, the interior locus must exist and be Device- or Host-sourced.
+            if let OperatorPath::ABR { interior_locus_id, .. } = &rel.operator_path {
                 match locus_index.get(interior_locus_id.as_str()) {
                     None => {
                         return Err(DeclarationError::Inadmissible(format!(

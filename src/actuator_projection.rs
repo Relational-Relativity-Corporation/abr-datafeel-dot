@@ -9,25 +9,26 @@
 // silently forwarded. Hardware limits are declared here and enforced
 // before any command reaches the device.
 //
-// The projection inspects the declaration's relations to route locus values
-// to actuator channels. Recognised target loci:
-//   "L-thermal" → ThermalCommand  (thermal feedback / homeostatic correction)
-//   "L-haptic"  → HapticCommand   (vibrotactile amplitude and duration)
-//   "L-red"     → OpticalCommand r channel (~626 nm)
+// V0.3: The projection now reads per-relation OperatorOutput.sigma values
+// from RelationalState.relation_outputs, replacing the previous approach
+// of reading raw locus values. Both PrimaryDeltaSigma and ABR relations
+// are evaluated — the gated sigma from ABR carries the coupling between
+// the thermal source locus and the circadian interior locus.
+//
+// The haptic envelope (carrier Hz, base duration, amplitude scale) is
+// read from the MDeclaration and applied when projecting haptic commands.
+// This differentiates activity and rest profiles at the same carrier frequency.
+//
+// Channel routing by target locus ID:
+//   "L-thermal" → ThermalCommand  (oppose delta)
+//   "L-haptic"  → HapticCommand   (gated sigma → amplitude + envelope duration)
+//   "L-red"     → OpticalCommand r channel (~626 nm, PBM window)
 //   "L-green"   → OpticalCommand g channel (~530 nm)
-//   "L-blue"    → OpticalCommand b channel (~466 nm)
-//
-// Unknown target loci are silently ignored — the projection only acts on
-// what it knows how to map. This keeps the projection stable as declarations
-// evolve.
-//
-// The projection rules below are initial declarations for Phase 4 testing.
-// Origin must review and finalise these mappings against the actual
-// DataFeel hardware limits (docs/hardware_limits.md) before physical actuation.
+//   "L-blue"    → OpticalCommand b channel (~466 nm, ipRGC pathway)
 
 use thiserror::Error;
 
-use crate::declaration::{MDeclaration, OperatorPath};
+use crate::declaration::MDeclaration;
 use crate::device_interface::{
     CommandSet, HapticCommand, OpticalCommand, ThermalCommand, DeviceError,
 };
@@ -76,6 +77,26 @@ impl Default for HardwareLimits {
 }
 
 // ---------------------------------------------------------------------------
+// Resonance
+// ---------------------------------------------------------------------------
+
+/// Multimodal resonance flag — indicates whether haptic and optical outputs
+/// are simultaneously above a meaningful threshold in this step.
+///
+/// This is a computed observation from the operator outputs, not a claim
+/// about physiological effect. It marks the region of the circadian sweep
+/// where both modalities are jointly expressing.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResonanceFlag {
+    /// Both haptic and at least one optical channel are above threshold.
+    Resonant,
+    /// Only one modality is above threshold.
+    Partial,
+    /// Neither modality is above threshold.
+    Quiescent,
+}
+
+// ---------------------------------------------------------------------------
 // ActuatorProjection
 // ---------------------------------------------------------------------------
 
@@ -96,22 +117,13 @@ impl ActuatorProjection {
 
     /// Project a RelationalState to a CommandSet.
     ///
-    /// Iterates the declaration's relations to determine which locus values
-    /// drive which actuator channels. For each relation:
+    /// Iterates all declared relations (PrimaryΔΣ and ABR), reads their
+    /// OperatorOutput.sigma from state.relation_outputs, and routes to
+    /// the appropriate actuator channel based on the target locus ID.
     ///
-    ///   PrimaryΔΣ  — the `from` locus's sigma/value in locus_values drives
-    ///                the `to` locus's actuator channel.
-    ///   ABR        — not evaluated in the Phase 1–4 stub; ABR relations are
-    ///                recorded in the declaration but deferred to Phase 3.
-    ///
-    /// Channel mapping:
-    ///   "L-thermal" → thermal power (oppose delta: cooling on warming, heating on cooling)
-    ///   "L-haptic"  → haptic amplitude proportional to |driving value|
-    ///   "L-red"     → r channel intensity proportional to driving value
-    ///   "L-green"   → g channel intensity proportional to |driving value|
-    ///   "L-blue"    → b channel intensity proportional to driving value
-    ///
-    /// All values are clamped to HardwareLimits before dispatch.
+    /// The haptic envelope from the declaration modulates duration and
+    /// amplitude scale — this is how activity and rest profiles produce
+    /// different haptic character at the same carrier frequency.
     pub fn project(
         &self,
         state: &RelationalState,
@@ -119,7 +131,6 @@ impl ActuatorProjection {
     ) -> Result<CommandSet, ProjectionError> {
         let delta = state.delta_thermistor.unwrap_or(0.0);
 
-        // Accumulate optical channel contributions across all relations.
         let mut r_sum: f32 = 0.0;
         let mut g_sum: f32 = 0.0;
         let mut b_sum: f32 = 0.0;
@@ -127,43 +138,46 @@ impl ActuatorProjection {
         let mut haptic_amplitude: f32 = 0.0;
         let mut haptic_duration_ms: u32 = 0;
 
-        for rel in &decl.relations {
-            // Phase 1–4 stub: only evaluate PrimaryDeltaSigma relations.
-            if !matches!(rel.operator_path, OperatorPath::PrimaryDeltaSigma) {
-                continue;
-            }
+        let envelope = &decl.haptic_envelope;
 
-            // Get the driving value for this relation's source locus.
-            let driving = state.locus_values.get(&rel.from).copied().unwrap_or(0.0);
+        for rel in &decl.relations {
+            // Read the operator output for this relation.
+            // For relations not yet in relation_outputs (e.g. on first step),
+            // fall back to 0.0 driving value.
+            let output = state.relation_outputs.get(&rel.id);
+            let sigma = output.map(|o| o.sigma).unwrap_or(0.0);
 
             match rel.to.as_str() {
                 "L-thermal" => {
-                    // Oppose the thermal delta.
+                    // Oppose the thermal delta regardless of operator path.
                     if delta.abs() > f32::EPSILON {
                         let raw = -delta.signum() * (delta.abs() / 5.0).min(1.0);
                         thermal_power += raw;
                     }
                 }
                 "L-haptic" => {
-                    // Amplitude proportional to |driving value|, scaled to [0, 1].
-                    haptic_amplitude += (driving.abs() / 3.0).min(1.0);
-                    haptic_duration_ms = haptic_duration_ms
-                        .max((driving.abs() * 50.0) as u32);
+                    // Amplitude proportional to |gated sigma|, scaled by profile
+                    // amplitude_scale and duration_ms_base from the envelope.
+                    let raw_amp = (sigma.abs() / 3.0).min(1.0) * envelope.amplitude_scale;
+                    haptic_amplitude += raw_amp;
+
+                    // Duration: envelope base × sigma magnitude, capped at max.
+                    let raw_dur = (sigma.abs() * envelope.duration_ms_base as f32) as u32;
+                    haptic_duration_ms = haptic_duration_ms.max(raw_dur);
                 }
                 "L-red" => {
-                    // Intensity proportional to driving value (clamped positive).
-                    r_sum += (driving / 10.0).clamp(0.0, 1.0);
+                    // Intensity proportional to gated sigma (clamped positive).
+                    r_sum += (sigma / 10.0).clamp(0.0, 1.0);
                 }
                 "L-green" => {
-                    g_sum += (driving.abs() / 10.0).min(1.0);
+                    g_sum += (sigma.abs() / 10.0).min(1.0);
                 }
                 "L-blue" => {
-                    // Intensity proportional to driving value (clamped positive).
-                    b_sum += (driving / 10.0).clamp(0.0, 1.0);
+                    // Intensity proportional to gated sigma (clamped positive).
+                    b_sum += (sigma / 10.0).clamp(0.0, 1.0);
                 }
                 _ => {
-                    // Unknown target locus — ignore. Declaration may include
-                    // loci not yet handled by this projection stub.
+                    // Unknown target locus — ignore silently.
                 }
             }
         }
@@ -174,10 +188,8 @@ impl ActuatorProjection {
         let thermal = ThermalCommand::new(thermal_power)?;
 
         // --- Haptic ---
-        let haptic_amplitude =
-            haptic_amplitude.min(self.limits.haptic_amplitude_max);
-        let haptic_duration_ms =
-            haptic_duration_ms.min(self.limits.haptic_duration_max_ms);
+        let haptic_amplitude = haptic_amplitude.min(self.limits.haptic_amplitude_max);
+        let haptic_duration_ms = haptic_duration_ms.min(self.limits.haptic_duration_max_ms);
         let haptic = HapticCommand::new(haptic_amplitude, haptic_duration_ms)?;
 
         // --- Optical ---
@@ -188,5 +200,26 @@ impl ActuatorProjection {
         let optical = OpticalCommand { r, g, b, timing_ms: 100 };
 
         Ok(CommandSet { thermal, haptic, optical })
+    }
+
+    /// Compute the multimodal resonance flag for a given command set.
+    ///
+    /// Resonance thresholds (conservative — not derived from clinical evidence):
+    ///   Haptic: amplitude > 0.10 (10% of normalised max)
+    ///   Optical: any channel > 10 (out of 200 max intensity)
+    ///
+    /// These are instrument thresholds for identifying the intersection region
+    /// in the sweep output. They are not therapeutic targets.
+    pub fn resonance_flag(commands: &CommandSet) -> ResonanceFlag {
+        let haptic_active  = commands.haptic.amplitude > 0.10;
+        let optical_active = commands.optical.r > 10
+            || commands.optical.g > 10
+            || commands.optical.b > 10;
+
+        match (haptic_active, optical_active) {
+            (true, true)  => ResonanceFlag::Resonant,
+            (true, false) | (false, true) => ResonanceFlag::Partial,
+            (false, false) => ResonanceFlag::Quiescent,
+        }
     }
 }

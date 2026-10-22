@@ -17,7 +17,7 @@
 use std::sync::Arc;
 use abr_datafeel_dot::{
     actuator_projection::ActuatorProjection,
-    declaration::{Locus, LocusSource, MDeclaration, OperatorPath, Relation, BoundaryConditions},
+    declaration::{HapticEnvelope, Locus, LocusSource, MDeclaration, OperatorPath, Relation, BoundaryConditions},
     device_interface::{DeviceInterface, MockDevice},
     observation::ObsProvenance,
     relational_loop::RelationalLoop,
@@ -41,8 +41,10 @@ fn minimal_declaration() -> MDeclaration {
                 from: "L-thermal".to_string(),
                 to: "L-haptic".to_string(),
                 operator_path: OperatorPath::PrimaryDeltaSigma,
+                description: None,
             },
         ],
+        haptic_envelope: HapticEnvelope::default(),
         provenance: "Test — conformance.rs".to_string(),
     }
 }
@@ -119,6 +121,7 @@ fn abr_path_rejected_without_interior_locus() {
     let mut decl = minimal_declaration();
     decl.relations[0].operator_path = OperatorPath::ABR {
         interior_locus_id: "L-nonexistent".to_string(),
+        gate_inverted: false,
     };
     let err = decl.validate().unwrap_err();
     assert!(err.to_string().contains("not declared"));
@@ -130,6 +133,7 @@ fn abr_path_rejected_with_actuator_interior_locus() {
     // L-haptic exists but is Actuator-sourced — not admissible as interior locus.
     decl.relations[0].operator_path = OperatorPath::ABR {
         interior_locus_id: "L-haptic".to_string(),
+        gate_inverted: false,
     };
     let err = decl.validate().unwrap_err();
     assert!(err.to_string().contains("not Device-sourced or Host-sourced"));
@@ -141,6 +145,7 @@ fn abr_path_accepted_with_device_interior_locus() {
     // L-thermal is Device-sourced — admissible as interior locus.
     decl.relations[0].operator_path = OperatorPath::ABR {
         interior_locus_id: "L-thermal".to_string(),
+        gate_inverted: false,
     };
     assert!(decl.validate().is_ok());
 }
@@ -203,6 +208,7 @@ fn projection_commands_stay_within_hardware_limits() {
         delta_thermistor: Some(20.0),  // large disturbance
         sigma_thermistor: 20.0,
         locus_values,
+        relation_outputs: Default::default(),
     };
 
     let decl = minimal_declaration();
