@@ -1,0 +1,40 @@
+{
+  "region": "DataFeel Dot contact surface",
+  "boundary_conditions": {
+    "temperature_range_c": [-5.0, 45.0],
+    "vibration_hz": [150.0, 200.0],
+    "optical_nm": [466.0, 626.0]
+  },
+  "loci": [
+    {
+      "id": "L-thermal",
+      "observable": "thermistor_c",
+      "source": "device"
+    },
+    {
+      "id": "L-haptic",
+      "observable": "haptic_amplitude",
+      "source": "actuator"
+    },
+    {
+      "id": "L-optical",
+      "observable": "rgb_intensity",
+      "source": "actuator"
+    }
+  ],
+  "relations": [
+    {
+      "id": "R-01",
+      "from": "L-thermal",
+      "to": "L-haptic",
+      "operator_path": "primary_delta_sigma"
+    },
+    {
+      "id": "R-02",
+      "from": "L-thermal",
+      "to": "L-optical",
+      "operator_path": "primary_delta_sigma"
+    }
+  ],
+  "provenance": "Origin — Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. Initial declaration for Phase 1–4 software development. Interior-locus condition is null on both relations pending actual hardware telemetry; both run Primary Δ→Σ. The A→B→R path becomes available once a grounded interior locus is declared from physical measurement."
+}
