@@ -127,6 +127,7 @@ dependencies = [
 [[package]]
 name = "irrs-kernel"
 version = "8.0.0"
+source = "git+https://github.com/Relational-Relativity-Corporation/abr-irrs?rev=27b31ce#27b31ce39de2e34d28da3fccd65d8052959b49a0"
 
 [[package]]
 name = "itoa"
