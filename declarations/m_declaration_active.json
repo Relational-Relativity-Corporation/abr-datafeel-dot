@@ -66,5 +66,7 @@
     "duration_ms_base": 30,
     "amplitude_scale": 1.0
   },
-  "provenance": "Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. V0.4 activity-associated profile. ABR operator with Origin-declared activity schedule interior locus. Scientific basis in docs/verification_record.md."
+  "provenance": "Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. V0.4 activity-associated profile. ABR operator with Origin-declared activity schedule interior locus. Scientific basis in docs/verification_record.md.",
+  "rho_base": 0.5,
+  "chi_0": 1.0
 }

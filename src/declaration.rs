@@ -250,6 +250,9 @@ pub struct Relation {
 // MDeclaration
 // ---------------------------------------------------------------------------
 
+fn default_rho_base() -> f64 { 0.5 }
+fn default_chi_0()    -> f64 { 1.0 }
+
 /// The full declared M for the DataFeel Dot application.
 /// Parsed from declarations/m_declaration.json.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -265,6 +268,15 @@ pub struct MDeclaration {
     pub haptic_envelope: HapticEnvelope,
     /// Origin statement — who declared this M and when.
     pub provenance: String,
+    /// Domain-specific ρ ceiling declared by M.
+    /// Dimensionless; constrains the kernel's E-field normalisation.
+    /// Required by irrs-kernel operator_e. Default: 0.5.
+    #[serde(default = "default_rho_base")]
+    pub rho_base: f64,
+    /// Domain-specific reference scale χ₀ declared by M.
+    /// Units match the source locus (°C for thermal). Default: 1.0.
+    #[serde(default = "default_chi_0")]
+    pub chi_0: f64,
 }
 
 impl MDeclaration {

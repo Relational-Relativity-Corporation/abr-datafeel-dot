@@ -19,9 +19,9 @@ serde_json = "1.0"
 thiserror = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 
-# abr-kernel: pin to a specific commit before any physical hardware actuation.
-# Uncomment and set rev= once the kernel crate is confirmed accessible.
-# abr-kernel = { git = "https://github.com/Relational-Relativity-Corporation/abr-kernel", rev = "COMMIT_SHA" }
+# irrs-kernel: Kernel V8 — pinned to authorized commit 27b31ce.
+# Authorized pin established during Verifier Review — do not change without separate authorization.
+irrs-kernel = { git = "https://github.com/Relational-Relativity-Corporation/abr-irrs", rev = "27b31ce" }
 
 [dev-dependencies]
 # No external test deps required for Phase 1–4 conformance tests.

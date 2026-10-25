@@ -20,17 +20,24 @@ use abr_datafeel_dot::{
     relational_loop::RelationalLoop,
 };
 
-/// Helper: run a thermistor sequence through the loop and return (delta, sigma)
-/// pairs for each step.
+/// Helper: run a thermistor sequence through the loop and return
+/// (r_persistence, sigma) pairs for each step.
+///
+/// Uses m_declaration_active.json (activity profile) with time_of_day_phase=0.5
+/// (noon), so L-activity = 1.0 and gate = 1.0 throughout. This makes sigma
+/// equal to r_persistence directly, giving clean numeric verification.
 fn run_sequence(temps: Vec<f32>) -> Vec<(f32, f32)> {
-    let decl = MDeclaration::load("declarations/m_declaration.json")
-        .expect("m_declaration.json must exist for replay tests");
+    let decl = MDeclaration::load("declarations/m_declaration_active.json")
+        .expect("m_declaration_active.json must exist for replay tests");
     let device = MockDevice::new(temps.clone());
     let projection = ActuatorProjection::default();
     let mut loop_ = RelationalLoop::new(decl, projection, Arc::clone(&device) as Arc<_>);
+    // time_of_day_phase = 0.5 → noon → L-activity = 1.0 → gate = 1.0.
+    let mut host_obs = std::collections::HashMap::new();
+    host_obs.insert("time_of_day_phase".to_string(), 0.5_f32);
     let mut results = Vec::new();
     for _ in 0..temps.len() {
-        let output = loop_.step(ObsProvenance::MockFixture, &Default::default()).unwrap();
+        let output = loop_.step(ObsProvenance::MockFixture, &host_obs).unwrap();
         results.push((
             output.state.delta_thermistor.unwrap_or(0.0),
             output.state.sigma_thermistor,

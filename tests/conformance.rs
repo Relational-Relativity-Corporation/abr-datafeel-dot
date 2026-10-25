@@ -49,6 +49,8 @@ fn minimal_declaration() -> MDeclaration {
         ],
         haptic_envelope: HapticEnvelope::default(),
         provenance: "Test — conformance.rs".to_string(),
+        rho_base: 0.5,
+        chi_0: 1.0,
     }
 }
 

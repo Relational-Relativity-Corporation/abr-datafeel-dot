@@ -66,5 +66,7 @@
     "duration_ms_base": 200,
     "amplitude_scale": 0.5
   },
-  "provenance": "Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. V0.4 rest-associated profile. ABR operator with Origin-declared rest schedule interior locus. gate_inverted=false; night-preference expressed by schedule. Scientific basis in docs/verification_record.md."
+  "provenance": "Robin Macomber, Metatron Dynamics, Inc. — 2026-10-21. V0.4 rest-associated profile. ABR operator with Origin-declared rest schedule interior locus. gate_inverted=false; night-preference expressed by schedule. Scientific basis in docs/verification_record.md.",
+  "rho_base": 0.5,
+  "chi_0": 1.0
 }
