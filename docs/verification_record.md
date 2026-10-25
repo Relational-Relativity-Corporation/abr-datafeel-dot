@@ -66,6 +66,7 @@ used in cited experiments.
 | 2026-10-21 | V0.2: host locus, two profiles, comparative demo | 17/17 pass | cargo test conformance + replay |
 | 2026-10-21 | V0.3: ABR operator, circadian gate, multimodal resonance sweep | 17/17 pass | cargo test conformance + replay; demo sweep output verified |
 | 2026-10-21 | V0.4: Origin-declared schedules, CoActive rename, MissingHostObservable error, midnight continuity | 23/23 pass | 19 conformance + 4 replay; 20-step sweep verified; no simultaneous CO_ACTIVE (schedules complementary by design); evaluator provisional simulation label confirmed |
+| 2026-10-24 | V0.5: evaluate_stub replaced by evaluate_kernel (irrs-kernel rev 27b31ce, frozen V8). sigma = r_persistence × gate. rho_base/chi_0 added to MDeclaration. Demo labels corrected. Docs: kernel_execution_trace.md, datafeel_hardware_collaboration.md added. | 23/23 pass | Compiler: rustc 1.97.0 (2d8144b78 2026-07-07). Commit: 39d9ea1 (implementation) + docs commit. No CO_ACTIVE produced at any phase (peak sigma ≈ 0.4, optical blue = 8, below threshold of 10). IRRS admission: not independently established. Hardware validation: OPEN. E-1 session persistence: OPEN. |
 
 ## Phase 5: Hardware Integration
 

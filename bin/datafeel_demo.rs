@@ -1,11 +1,18 @@
 // datafeel_demo.rs
 //
-// DataFeel Dot — V0.4 multimodal co-activity sweep.
+// DataFeel Dot — V0.5 multimodal co-activity sweep.
 //
-// EVALUATOR NOTE: The relational loop uses a provisional simulation of the
-// PrimaryΔΣ and ABR operator paths. It is NOT a Kernel V8 implementation.
-// Output reflects the declared relational topology and Origin schedules;
-// it is not a validated kernel result. See relational_loop.rs for detail.
+// EVALUATOR NOTE:
+//   Kernel execution:  actual frozen Kernel V8 operators via irrs-kernel rev 27b31ce.
+//   Device execution:  simulated — MockDevice (no physical hardware connected).
+//   IRRS admission:    not independently established for this application.
+//   Hardware validation: OPEN — Phase 5 (physical integration) not started.
+//
+// Output reflects the declared relational topology and Origin schedules evaluated
+// through actual Kernel V8 operator_e / operator_e_v5 execution.
+// sigma = r_persistence × gate, where r_persistence is the per-step E-field
+// rate of change (E_current_t − E_prior_t) — not an accumulated Σ.
+// See docs/kernel_execution_trace.md for the two-step numerical trace.
 //
 // Sweeps the circadian phase (time_of_day_phase) from 0.0 → 0.95 in 20 steps
 // (Δ = 0.05 per step, representing ~72 minutes of circadian time per step).
@@ -13,7 +20,15 @@
 // both the activity-associated and rest-associated profiles using the ABR
 // operator gated by their respective Origin-declared profile loci.
 //
-// V0.4 changes from V0.3:
+// V0.5 changes from V0.4:
+//   - evaluate_stub (provisional simulation) replaced by evaluate_kernel,
+//     which runs frozen Kernel V8 operators from irrs-kernel at rev 27b31ce.
+//   - sigma is now r_persistence × gate (per-step E-field rate of change),
+//     replacing the previous accumulated raw_sigma × gate formulation.
+//   - rho_base (0.5) and chi_0 (1.0) added to MDeclaration; required by kernel.
+//   - Demo header and footer labels updated to reflect actual kernel execution.
+//
+// V0.4 changes from V0.3 (preserved for reference):
 //   - Activity and rest profiles now use Origin-declared loci (L-activity,
 //     L-rest) with explicit schedule boundaries, replacing the raw
 //     time_of_day_phase gate. This corrects the midnight discontinuity
@@ -149,14 +164,15 @@ fn main() {
         .expect("m_declaration_rest.json not found");
 
     println!();
-    println!("DataFeel Dot — V0.4 Multimodal Co-Activity Sweep");
+    println!("DataFeel Dot — V0.5 Multimodal Co-Activity Sweep");
     println!("══════════════════════════════════════════════════════════════════════════════════════════════════");
     println!("Circadian phase sweep: 0.00 → 0.95, Δ = 0.05 (20 steps ≈ 72 min each)");
     println!("Thermal sequence: 12-step external disturbance → recovery, MockFixture, no hardware");
     println!("Operator: ABR — haptic (R-01) and optical (R-02) gated by Origin-declared profile locus");
     println!("Activity: sigma × L-activity  [schedule: 05:00–06:00 rise | 06:00–18:00 peak | 18:00–20:00 fall]");
     println!("Rest:     sigma × L-rest       [schedule: 19:00–21:00 rise | 21:00–03:00 peak | 03:00–07:00 fall]");
-    println!("Evaluator: provisional simulation — not a validated Kernel V8 implementation");
+    println!("Kernel: irrs-kernel rev 27b31ce (frozen V8 operators — operator_e / operator_e_v5)");
+    println!("Device: MockDevice (simulated). IRRS admission: not independently established.");
     println!("══════════════════════════════════════════════════════════════════════════════════════════════════");
     println!();
 
@@ -272,7 +288,7 @@ fn main() {
     println!("  Steps with rest co-active:          {} / 20", rest_coactive_count);
     println!("  Steps with simultaneous (both):     {} / 20", both_coactive_count);
     println!();
-    println!("  V0.4 schedule note:");
+    println!("  V0.5 schedule note:");
     println!("  Activity co-active window: declared schedule 05:00–20:00.");
     println!("    rise_start=0.208 (05:00), peak_start=0.25 (06:00),");
     println!("    peak_end=0.75 (18:00), fall_end=0.833 (20:00).");
@@ -284,10 +300,11 @@ fn main() {
     println!("  (Δ=0.05, ~72 min/step) it may fall between step boundaries.");
     println!();
     println!("══════════════════════════════════════════════════════════════════════════════════════════════════");
-    println!("Evaluator: provisional simulation — not a validated Kernel V8 implementation.");
-    println!("All outputs are computed device commands (MockFixture). No physiological effects are claimed.");
-    println!("Experimental sensory configurations only. Not therapeutic prescriptions.");
-    println!("Scientific basis: docs/verification_record.md");
+    println!("Kernel execution: irrs-kernel rev 27b31ce (frozen V8 — operator_e / operator_e_v5).");
+    println!("Device execution: MockDevice (simulated). IRRS admission: not independently established.");
+    println!("Hardware validation: OPEN. All outputs are computed device commands (MockFixture).");
+    println!("No physiological effects are claimed. Experimental sensory configurations only.");
+    println!("Not therapeutic prescriptions. Mathematical trace: docs/kernel_execution_trace.md");
     println!();
 }
 
